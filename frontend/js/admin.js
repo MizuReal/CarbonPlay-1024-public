@@ -23,6 +23,15 @@
       },
       body: body ? JSON.stringify(body) : undefined,
     });
+    // Early handle admin forbidden
+    if (res.status === 403) {
+      let msg = 'Admin access required';
+      try { const err = await res.json(); msg = err.message || msg; } catch {}
+      if (window.notify?.error) window.notify.error(msg, 2500); else console.warn(msg);
+      // Redirect shortly to avoid remaining on a broken page
+      setTimeout(() => { window.location.href = '../../index.html'; }, 1500);
+      return Promise.reject(new Error('Forbidden'));
+    }
     const data = await res.json();
     if (!res.ok) {
       throw new Error(data.message || `${method} ${path} failed (${res.status})`);
@@ -320,7 +329,7 @@
       else await api('/admin/users', { method: 'POST', body: payload });
       document.getElementById('modal-users').close();
       loaders.users();
-    } catch (e) { alert('Save failed'); }
+  } catch (e) { window.notify?.error('Save failed'); }
   });
 
   const profileForm = $('#form-profiles');
@@ -340,7 +349,7 @@
       else await api('/admin/profiles', { method: 'POST', body: payload });
       document.getElementById('modal-profiles').close();
       loaders.profiles();
-    } catch (e) { alert('Save failed'); }
+  } catch (e) { window.notify?.error('Save failed'); }
   });
 
   const challengeForm = $('#form-challenges');
@@ -363,7 +372,7 @@
       else await api('/admin/challenges', { method: 'POST', body: payload });
       document.getElementById('modal-challenges').close();
       loaders.challenges();
-    } catch (e) { alert('Save failed: ' + e.message); }
+  } catch (e) { window.notify?.error('Save failed: ' + (e.message || '')); }
   });
 
   const factorForm = $('#form-factors');
@@ -384,7 +393,7 @@
       else await api('/admin/emission-factors', { method: 'POST', body: payload });
       document.getElementById('modal-factors').close();
       loaders.factors();
-    } catch (e) { alert('Save failed'); }
+  } catch (e) { window.notify?.error('Save failed'); }
   });
 
   // Quick toggle active status for challenges
@@ -402,7 +411,7 @@
         });
         loaders.challenges();
       } catch (e) {
-        alert('Failed to toggle status');
+  window.notify?.error('Failed to toggle status');
       }
       return;
     }
@@ -419,11 +428,11 @@
       
       try {
         const result = await api(`/admin/challenges/${challengeId}`, { method: 'DELETE' });
-        alert(result.message || 'Challenge deleted');
+  window.notify?.success(result.message || 'Challenge deleted');
         loaders.challenges();
       } catch (e) {
-        const msg = e.message || 'Failed to delete challenge';
-        alert(msg);
+  const msg = e.message || 'Failed to delete challenge';
+  window.notify?.error(msg);
       }
     }
   });

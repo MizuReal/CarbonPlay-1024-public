@@ -7,6 +7,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
   <link rel="stylesheet" href="frontend/dist/styles.css">
+  <script src="frontend/js/admin-notify.js"></script>
 </head>
 <body>
   <div id="navbar-placeholder"></div>
@@ -82,6 +83,15 @@
   let TIPS_CACHE = [];
   let CURRENT_VIEW = 'milestones';
   let CURRENT_FILTER = 'all';
+
+  // Initialize current view/filter from the active tab in the DOM
+  (function initCurrentTabState(){
+    const active = document.querySelector('.tabs [data-view].tab-active') || document.querySelector('[data-view][data-filter="all"]');
+    if (active) {
+      CURRENT_VIEW = active.getAttribute('data-view') || 'milestones';
+      CURRENT_FILTER = active.getAttribute('data-filter') || 'all';
+    }
+  })();
   let AUTO_REFRESH_INTERVAL = null;
 
     function formatTime(ts) {
@@ -228,12 +238,18 @@
       if (refreshEl) refreshEl.setAttribute('disabled', '');
       showSkeleton(3);
       
+      console.log(`[Frontend] loadMilestones called with CURRENT_FILTER="${CURRENT_FILTER}"`);
+      
       return new Promise((resolve, reject) => {
         const token = localStorage.getItem('token');
         const xhr = new XMLHttpRequest();
         
-        xhr.open('GET', `${API_BASE}/social/milestones?limit=50`, true);
+  const q = new URLSearchParams({ limit: '50', filter: String(CURRENT_FILTER || 'all'), ts: String(Date.now()) });
+  const url = `${API_BASE}/social/milestones?${q.toString()}`;
+  console.log(`[Frontend] Fetching: ${url}`);
+  xhr.open('GET', url, true);
         xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+  xhr.setRequestHeader('Cache-Control', 'no-cache');
         
         xhr.onload = function() {
           if (refreshEl) refreshEl.removeAttribute('disabled');
@@ -249,7 +265,9 @@
               const data = JSON.parse(xhr.responseText);
               if (data.status === 'success') {
                 FEED_CACHE = data.data.feed || [];
-                applyMilestoneFilter(CURRENT_FILTER);
+                console.log(`[Frontend] Received ${FEED_CACHE.length} users for filter="${CURRENT_FILTER}"`);
+                // Server returns already-filtered feed; render directly
+                renderMilestones(FEED_CACHE);
                 resolve();
               } else {
                 document.getElementById('feed').innerHTML = `<div class="card p-4 bg-base-100">Error: ${data.message}</div>`;
@@ -321,28 +339,6 @@
       });
     }
 
-    function applyMilestoneFilter(filter) {
-      CURRENT_FILTER = filter;
-      let list = FEED_CACHE;
-      
-      if (filter === 'milestones') {
-        list = FEED_CACHE.filter(i => (i.milestones || []).length > 0);
-      } else if (filter === 'low') {
-        list = FEED_CACHE.filter(i => {
-          const avg = Number(i?.stats?.avg_emissions || 0);
-          return avg > 0 && avg < 100;
-        });
-      } else if (filter === 'active') {
-        list = FEED_CACHE.filter(i => {
-          const activities = Number(i?.stats?.activities || 0);
-          const scenarios = Number(i?.stats?.scenarios || 0);
-          return (activities + scenarios) > 0;
-        });
-      }
-      
-      renderMilestones(list);
-    }
-
     function startAutoRefresh() {
       // Clear existing interval
       if (AUTO_REFRESH_INTERVAL) {
@@ -395,7 +391,8 @@
       const tip_type = document.getElementById('tipType').value;
       
       if (!content) {
-        alert('Please enter a tip');
+        if (window.notify?.warning) window.notify.warning('Please enter a tip');
+        else alert('Please enter a tip');
         return;
       }
 
@@ -417,7 +414,8 @@
         document.getElementById('tipType').value = 'general';
         await loadTips();
       } catch (e) {
-        alert('Error posting tip: ' + e.message);
+        if (window.notify?.error) window.notify.error('Error posting tip: ' + e.message);
+        else alert('Error posting tip: ' + e.message);
       }
     });
 
@@ -428,6 +426,8 @@
 
       const view = tab.getAttribute('data-view');
       const filter = tab.getAttribute('data-filter');
+      
+      console.log(`[Frontend] Tab clicked: view="${view}", filter="${filter}"`);
 
       // Remove active from all tabs
       document.querySelectorAll('[data-view]').forEach(t => t.classList.remove('tab-active'));
@@ -436,6 +436,7 @@
       if (view === 'tips') {
         // Switch to tips view
         CURRENT_VIEW = 'tips';
+        console.log(`[Frontend] Switching to tips view`);
         document.getElementById('milestonesView').classList.add('hidden');
         document.getElementById('tipsView').classList.remove('hidden');
         if (TIPS_CACHE.length === 0) loadTips();
@@ -443,14 +444,12 @@
         // Switch to milestones view and apply filter
         CURRENT_VIEW = 'milestones';
         CURRENT_FILTER = filter || 'all';
+        console.log(`[Frontend] Switching to milestones view with filter="${CURRENT_FILTER}"`);
         document.getElementById('milestonesView').classList.remove('hidden');
         document.getElementById('tipsView').classList.add('hidden');
         
-        if (FEED_CACHE.length === 0) {
-          loadMilestones();
-        } else {
-          applyMilestoneFilter(CURRENT_FILTER);
-        }
+        // Always ask server for the selected filter to ensure alignment
+        loadMilestones();
       }
     });
 
@@ -547,7 +546,11 @@
     });
 
     loadUserProfile();
-    loadMilestones();
+    if (CURRENT_VIEW === 'milestones') {
+      loadMilestones();
+    } else {
+      loadTips();
+    }
     startAutoRefresh();
   </script>
 </body>

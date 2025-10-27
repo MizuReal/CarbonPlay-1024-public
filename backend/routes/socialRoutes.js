@@ -10,6 +10,9 @@ router.use(authenticate);
 router.post('/likes/milestone', socialController.toggleMilestoneLike);
 router.get('/likes/milestone', socialController.getMilestoneLikes);
 
+// Milestones feed
+router.get('/milestones', socialController.getMilestones);
+
 // Tips
 router.post('/tips', socialController.createTip);
 router.get('/tips', socialController.getTips);

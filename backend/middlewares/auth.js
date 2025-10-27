@@ -43,6 +43,26 @@ const authenticate = async (req, res, next) => {
   }
 };
 
+// Middleware to ensure the user is an active admin
+const authorizeAdmin = (req, res, next) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ status: 'error', message: 'Not authenticated' });
+    }
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ status: 'error', message: 'Admin access required' });
+    }
+    if (req.user.is_active === 0) {
+      return res.status(403).json({ status: 'error', message: 'Account is inactive' });
+    }
+    next();
+  } catch (e) {
+    console.error('authorizeAdmin error:', e);
+    return res.status(403).json({ status: 'error', message: 'Forbidden' });
+  }
+};
+
 module.exports = {
-  authenticate
+  authenticate,
+  authorizeAdmin
 };

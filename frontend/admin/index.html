@@ -11,6 +11,7 @@
   <style>
     body { font-family: 'Poppins', system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji'; }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
   <script>
     // Apply stored theme early
     (function(){
@@ -38,12 +39,16 @@
         </div>
         <div class="flex items-center gap-2">
           <a href="../../dashboard.html" class="btn btn-ghost hidden md:inline-flex"><i class="fa-solid fa-gauge mr-2"></i>Dashboard</a>
+          <a href="analytics.html" class="btn btn-ghost hidden md:inline-flex"><i class="fa-solid fa-chart-pie mr-2"></i>Analytics</a>
+          <a href="users-analytics.html" class="btn btn-ghost hidden md:inline-flex"><i class="fa-solid fa-users-line mr-2"></i>Users Analytics</a>
+          <a href="ph-sectors.html" class="btn btn-ghost hidden md:inline-flex"><i class="fa-solid fa-layer-group mr-2"></i>PH Sectors</a>
           <button id="adminRefreshBtn" class="btn btn-ghost"><i class="fa-solid fa-rotate"></i></button>
         </div>
       </div>
     </header>
 
     <main class="max-w-7xl mx-auto px-4 py-6">
+
       <!-- Tabs -->
       <div class="overflow-x-auto">
         <div class="tabs tabs-boxed w-max">
@@ -65,9 +70,9 @@
                 <p class="text-sm text-base-content/60">Manage app users and roles</p>
               </div>
               <div class="flex items-center gap-2">
-                <label class="input input-bordered flex items-center gap-2 w-64">
+                <label class="input input-bordered flex items-center gap-2 w-64 bg-base-100">
                   <i class="fa-solid fa-magnifying-glass opacity-60"></i>
-                  <input id="search-users" type="text" class="grow" placeholder="Search users..." />
+                  <input id="search-users" type="text" class="grow bg-base-100" placeholder="Search users..." />
                 </label>
                 <button class="btn btn-primary" data-action="open-modal" data-modal="modal-users" data-mode="create"><i class="fa-solid fa-plus mr-2"></i>Add User</button>
               </div>
@@ -104,9 +109,9 @@
                 <p class="text-sm text-base-content/60">Countries, households, and baselines</p>
               </div>
               <div class="flex items-center gap-2">
-                <label class="input input-bordered flex items-center gap-2 w-64">
+                <label class="input input-bordered flex items-center gap-2 w-64 bg-base-100">
                   <i class="fa-solid fa-magnifying-glass opacity-60"></i>
-                  <input id="search-profiles" type="text" class="grow" placeholder="Search profiles..." />
+                  <input id="search-profiles" type="text" class="grow bg-base-100" placeholder="Search profiles..." />
                 </label>
                 <button class="btn btn-primary" data-action="open-modal" data-modal="modal-profiles" data-mode="create"><i class="fa-solid fa-plus mr-2"></i>Add Profile</button>
               </div>
@@ -481,8 +486,10 @@
     <form method="dialog" class="modal-backdrop"><button>close</button></form>
   </dialog>
 
+  <script src="../js/admin-notify.js"></script>
   <script src="../js/admin.js"></script>
   <script src="../js/admin-climatiq-helper.js"></script>
   <script src="../js/admin-activity-generator.js"></script>
+  
 </body>
 </html>

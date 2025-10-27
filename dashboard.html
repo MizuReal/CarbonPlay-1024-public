@@ -9,6 +9,7 @@
     <link rel="stylesheet" href="frontend/dist/styles.css">
     <!-- DotLottie Web Component (use this for .lottie files) -->
     <script src="https://unpkg.com/@dotlottie/player-component@latest/dist/dotlottie-player.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
 </head>
 <body data-theme="forest">
     <div id="navbar-placeholder"></div>
@@ -76,7 +77,7 @@
                         <div id="carbonAnnual" class="text-xl font-bold text-primary">0 kg CO₂e</div>
                     </div>
                     <div class="h-64">
-                        <canvas id="carbonChart"></canvas>
+                        <div id="carbonChart" class="h-full"></div>
                     </div>
                 </div>
 
@@ -171,6 +172,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="frontend/js/navbar.js"></script>
     <script>loadNavbar('dashboard');</script>
+    <script src="frontend/js/admin-notify.js"></script>
     
     <!-- Scenarios Modal (embedded SPA-style) -->
     <div id="scenariosModal" class="modal hidden pointer-events-none">

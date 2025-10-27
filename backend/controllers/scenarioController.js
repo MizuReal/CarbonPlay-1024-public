@@ -894,29 +894,26 @@ exports.getMilestones = async (req, res) => {
 };
 
 // Get quick user stats summary for dashboard
+const { getXpWithLevel, xpToLevel } = require('../utils/xp');
+
 exports.getUserStats = async (req, res) => {
   try {
     const userId = req.user.id;
 
     // Fetch all counts in parallel; each promise resolves to the rows array
-    const [scRows, actRows, badgeRows, xpRows] = await Promise.all([
+    const [scRows, actRows, badgeRows, xpDetails] = await Promise.all([
       db.query('SELECT COUNT(*) AS scenarios_count FROM scenarios WHERE user_id = ? AND is_active = 1', [userId]).then(r => r[0]),
       db.query(`SELECT COUNT(sa.id) AS activities_count
                 FROM scenarios s LEFT JOIN scenario_activities sa ON s.id = sa.scenario_id
                WHERE s.user_id = ? AND s.is_active = 1`, [userId]).then(r => r[0]),
       db.query('SELECT COUNT(*) AS badges_count FROM user_challenges WHERE user_id = ? AND completed = 1', [userId]).then(r => r[0]),
-      db.query('SELECT xp_total FROM user_xp WHERE user_id = ?', [userId]).then(r => r[0])
+      getXpWithLevel(userId, 500)
     ]);
 
     const scenarios = Number(scRows?.[0]?.scenarios_count ?? 0);
     const activities = Number(actRows?.[0]?.activities_count ?? 0);
     const badges = Number(badgeRows?.[0]?.badges_count ?? 0);
-    const xpTotal = Number(xpRows?.[0]?.xp_total ?? 0);
-
-    // Simple leveling: 500 XP per level
-    const levelSize = 500;
-    const xpInLevel = xpTotal % levelSize;
-    const progressPct = levelSize ? Math.floor((xpInLevel / levelSize) * 100) : 0;
+    const xpInfo = xpDetails || xpToLevel(0, 500);
 
     res.json({
       status: 'success',
@@ -924,10 +921,12 @@ exports.getUserStats = async (req, res) => {
         scenarios,
         activities,
         badges,
-        xp_total: xpTotal,
-        level_size: levelSize,
-        xp_in_level: xpInLevel,
-        xp_progress_pct: progressPct
+        xp_total: xpInfo.xp_total,
+        level: xpInfo.level,
+        level_size: xpInfo.level_size,
+        xp_in_level: xpInfo.xp_in_level,
+        xp_to_next: xpInfo.xp_to_next,
+        xp_progress_pct: xpInfo.xp_progress_pct
       }
     });
   } catch (e) {

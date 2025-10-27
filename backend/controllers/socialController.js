@@ -277,3 +277,150 @@ exports.toggleTipLike = async (req, res) => {
     });
   }
 };
+
+// Get milestones feed (users activity snapshots) with optional filters
+exports.getMilestones = async (req, res) => {
+  try {
+    const currentUserId = req.user.id;
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 50, 200));
+    const filter = String(req.query.filter || 'all').toLowerCase();
+    
+    console.log(`[getMilestones] User ${currentUserId} requesting filter="${filter}", limit=${limit}`);
+
+    // Aggregate per-user activity stats
+    const [rows] = await db.query(
+      `SELECT 
+         u.id AS user_id,
+         u.username,
+         up.profile_picture,
+         COALESCE(COUNT(DISTINCT s.id), 0) AS scenarios,
+         COALESCE(COUNT(a.id), 0) AS activities,
+         COALESCE(AVG(a.co2e_amount), 0) AS avg_emissions,
+         GREATEST(
+           COALESCE(MAX(s.updated_at), '1970-01-01'),
+           COALESCE(MAX(a.created_at), '1970-01-01')
+         ) AS last_update
+       FROM users u
+       LEFT JOIN user_profiles up ON up.user_id = u.id
+       LEFT JOIN scenarios s ON s.user_id = u.id AND s.is_active = 1
+       LEFT JOIN scenario_activities a ON a.scenario_id = s.id
+       GROUP BY u.id
+       ORDER BY last_update DESC, u.id ASC`
+    );
+
+    // Likes info
+    const [likedByMe] = await db.query(
+      'SELECT milestone_user_id FROM social_likes WHERE user_id = ?',
+      [currentUserId]
+    );
+    const likedSet = new Set(likedByMe.map((r) => r.milestone_user_id));
+    const [likeCounts] = await db.query(
+      'SELECT milestone_user_id, COUNT(*) AS cnt FROM social_likes GROUP BY milestone_user_id'
+    );
+    const likeCountMap = new Map(likeCounts.map((r) => [r.milestone_user_id, r.cnt]));
+
+    const now = new Date();
+    const daysAgo = (d) => {
+      const dt = new Date(d);
+      return (now - dt) / (1000 * 60 * 60 * 24);
+    };
+
+    const decorate = (r) => {
+      const stats = {
+        scenarios: Number(r.scenarios || 0),
+        activities: Number(r.activities || 0),
+        avg_emissions: Number(r.avg_emissions || 0),
+      };
+      const lastUpdate = r.last_update ? new Date(r.last_update) : null;
+      const ms = [];
+      if (stats.activities >= 10) ms.push({ label: '10+ activities' });
+      if (stats.scenarios >= 3) ms.push({ label: '3+ scenarios' });
+      if (stats.avg_emissions > 0 && stats.avg_emissions < 100) ms.push({ label: 'Low CO₂e' });
+      if (lastUpdate && daysAgo(lastUpdate) <= 30) ms.push({ label: 'Active' });
+
+      return {
+        user: {
+          id: r.user_id,
+          username: r.username,
+          profile_picture: r.profile_picture || null,
+        },
+        stats,
+        milestones: ms,
+        last_update: lastUpdate,
+        like_count: Number(likeCountMap.get(r.user_id) || 0),
+        liked: likedSet.has(r.user_id),
+      };
+    };
+
+    // Apply server-side filtering to match tabs
+    let feed = rows.map(decorate);
+    console.log(`[getMilestones] Total users before filter: ${feed.length}`);
+    
+    // Debug: log each user's stats and milestones
+    feed.forEach(f => {
+      console.log(`  User: ${f.user.username}, scenarios=${f.stats.scenarios}, activities=${f.stats.activities}, avg_co2e=${f.stats.avg_emissions.toFixed(2)}, milestones=[${f.milestones.map(m => m.label).join(', ')}], last_update=${f.last_update ? daysAgo(f.last_update).toFixed(1) + 'd ago' : 'never'}`);
+    });
+    
+    if (filter === 'milestones') {
+      const before = feed.length;
+      feed = feed
+        .filter((f) => {
+          const hasMilestones = (f.milestones || []).length > 0;
+          if (!hasMilestones) console.log(`    → FILTERED OUT ${f.user.username}: no milestones`);
+          return hasMilestones;
+        })
+        // Rank: more milestone badges first, then more likes, then most recent
+        .sort((a, b) => {
+          const am = (a.milestones?.length || 0);
+          const bm = (b.milestones?.length || 0);
+          if (bm !== am) return bm - am;
+          if (b.like_count !== a.like_count) return b.like_count - a.like_count;
+          return (b.last_update?.getTime?.() || 0) - (a.last_update?.getTime?.() || 0);
+        });
+      console.log(`[getMilestones] After "milestones" filter: ${feed.length} users (filtered out ${before - feed.length})`);
+    } else if (filter === 'low') {
+      // Show users with low average emissions and rank by lowest first
+      const before = feed.length;
+      feed = feed
+        .filter((f) => {
+          const isLow = f.stats.avg_emissions > 0 && f.stats.avg_emissions < 100;
+          if (!isLow && f.stats.avg_emissions > 0) console.log(`    → FILTERED OUT ${f.user.username}: avg_emissions=${f.stats.avg_emissions.toFixed(2)} (too high or zero)`);
+          return isLow;
+        })
+        .sort((a, b) => {
+          if (a.stats.avg_emissions !== b.stats.avg_emissions) return a.stats.avg_emissions - b.stats.avg_emissions;
+          // tie-breaker: more activities (more evidence) first, then recent
+          if (b.stats.activities !== a.stats.activities) return b.stats.activities - a.stats.activities;
+          return (b.last_update?.getTime?.() || 0) - (a.last_update?.getTime?.() || 0);
+        });
+      console.log(`[getMilestones] After "low" filter: ${feed.length} users with avg < 100 CO2e (filtered out ${before - feed.length})`);
+    } else if (filter === 'active') {
+      // Active within last 30 days, rank by most scenarios then activities then recency
+      const before = feed.length;
+      feed = feed
+        .filter((f) => {
+          const isActive = f.last_update && daysAgo(f.last_update) <= 30;
+          if (!isActive) console.log(`    → FILTERED OUT ${f.user.username}: last_update=${f.last_update ? daysAgo(f.last_update).toFixed(1) + 'd ago' : 'never'} (not within 30d)`);
+          return isActive;
+        })
+        .sort((a, b) => {
+          if (b.stats.scenarios !== a.stats.scenarios) return b.stats.scenarios - a.stats.scenarios;
+          if (b.stats.activities !== a.stats.activities) return b.stats.activities - a.stats.activities;
+          return (b.last_update?.getTime?.() || 0) - (a.last_update?.getTime?.() || 0);
+        });
+      console.log(`[getMilestones] After "active" filter: ${feed.length} users active in 30d (filtered out ${before - feed.length})`);
+    } else {
+      // 'all': default recent-first (already ordered by SQL), but re-apply to be explicit
+      feed = feed.sort((a, b) => (b.last_update?.getTime?.() || 0) - (a.last_update?.getTime?.() || 0));
+      console.log(`[getMilestones] Using "all" filter (no reduction): ${feed.length} users`);
+    }
+
+    // Limit results after filtering/sorting
+    feed = feed.slice(0, limit);
+
+    res.json({ status: 'success', data: { feed } });
+  } catch (error) {
+    console.error('Get milestones error:', error);
+    res.status(500).json({ status: 'error', message: 'Failed to get milestones feed' });
+  }
+};

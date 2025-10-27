@@ -45,6 +45,7 @@
         </div>
     </main>
 
+    <script src="frontend/js/admin-notify.js"></script>
     <script>
         document.getElementById('loginForm').addEventListener('submit', async function(e) {
             e.preventDefault();
@@ -70,13 +71,28 @@
                     // Redirect to dashboard
                     window.location.href = 'dashboard.html';
                 } else {
-                    alert(data.message || 'Login failed. Please check your credentials.');
+                    if (window.notify?.error) window.notify.error(data.message || 'Login failed. Please check your credentials.');
+                    else alert(data.message || 'Login failed. Please check your credentials.');
                 }
             } catch (error) {
                 console.error('Error:', error);
-                alert('An error occurred during login. Please try again.');
+                if (window.notify?.error) window.notify.error('An error occurred during login. Please try again.');
+                else alert('An error occurred during login. Please try again.');
             }
         });
+    </script>
+    <script>
+        // Show any flash message passed from previous page (e.g., post-registration)
+        (function(){
+            try {
+                const msg = sessionStorage.getItem('flashMessage');
+                if (msg) {
+                    if (window.notify?.success) window.notify.success(msg);
+                    else alert(msg);
+                    sessionStorage.removeItem('flashMessage');
+                }
+            } catch (_) { /* ignore */ }
+        })();
     </script>
     <script src="frontend/js/navbar.js"></script>
     <script>loadNavbar();</script>

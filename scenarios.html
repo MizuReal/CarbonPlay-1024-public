@@ -147,6 +147,7 @@
 
         <script src="frontend/js/navbar.js"></script>
     <script>loadNavbar('scenarios');</script>
+    <script src="frontend/js/admin-notify.js"></script>
     <script src="frontend/js/scenarios.js"></script>
         <script>
             // Lightweight host to show challenges as a modal within scenarios page
@@ -297,7 +298,8 @@
                     }
                     await loadChallengesList();
                 } catch (e) {
-                    alert(e.message || 'Failed to join challenge');
+                    if (window.notify?.error) window.notify.error(e.message || 'Failed to join challenge');
+                    else alert(e.message || 'Failed to join challenge');
                 }
             }
 

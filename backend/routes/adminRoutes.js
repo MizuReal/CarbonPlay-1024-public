@@ -1,11 +1,276 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
+const axios = require('axios');
 const router = express.Router();
 const db = require('../config/database');
-const { authenticate } = require('../middlewares/auth');
+const { authenticate, authorizeAdmin } = require('../middlewares/auth');
 
 // Protect all admin routes (optionally add admin-role check later)
 router.use(authenticate);
+router.use(authorizeAdmin);
+
+// --- Admin Analytics Overview ---
+router.get('/analytics/overview', async (req, res) => {
+  try {
+    // Users summary
+    const usersP = db.query(`
+      SELECT 
+        COUNT(*) AS totalUsers,
+        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS activeUsers
+      FROM users
+    `);
+
+    // Profiles: countries, household, baselines
+    const profilesP = db.query(`
+      SELECT 
+        AVG(household_size) AS avgHousehold,
+        SUM(CASE WHEN baseline_calculated = 1 THEN 1 ELSE 0 END) AS baselineCalculated
+      FROM user_profiles
+    `);
+    const countriesP = db.query(`
+      SELECT country, COUNT(*) AS count
+      FROM user_profiles
+      GROUP BY country
+      ORDER BY count DESC
+      LIMIT 10
+    `);
+
+    // XP summary and top users
+    const xpSummaryP = db.query(`
+      SELECT COALESCE(SUM(xp_total),0) AS totalXP, COALESCE(AVG(xp_total),0) AS avgXP FROM user_xp
+    `);
+    const topXPUsersP = db.query(`
+      SELECT u.id, u.username, x.xp_total
+      FROM user_xp x
+      JOIN users u ON u.id = x.user_id
+      ORDER BY x.xp_total DESC
+      LIMIT 10
+    `);
+
+    // Challenges and enrollments
+    const challengesP = db.query(`
+      SELECT 
+        COUNT(*) AS totalChallenges,
+        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS activeChallenges
+      FROM challenges
+    `);
+    const enrollmentsP = db.query(`
+      SELECT 
+        COUNT(*) AS totalEnrollments,
+        SUM(CASE WHEN completed = 1 THEN 1 ELSE 0 END) AS completedEnrollments
+      FROM user_challenges
+    `);
+
+    // Scenarios summary
+    const scenariosP = db.query(`
+      SELECT 
+        COUNT(*) AS totalScenarios,
+        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS activeScenarios
+      FROM scenarios
+    `);
+    const emissionsTrendP = db.query(`
+      SELECT DATE(sa.created_at) AS day, COALESCE(SUM(sa.co2e_amount),0) AS total
+      FROM scenario_activities sa
+      WHERE sa.created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+      GROUP BY DATE(sa.created_at)
+      ORDER BY day
+    `);
+    const emissionsByCategoryP = db.query(`
+      SELECT category, COALESCE(SUM(co2e_amount),0) AS total
+      FROM scenario_activities
+      WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+      GROUP BY category
+      ORDER BY total DESC
+    `);
+
+    // Social summary
+    const tipsP = db.query('SELECT COUNT(*) AS totalTips FROM social_tips');
+    const tipLikesP = db.query('SELECT COUNT(*) AS totalTipLikes FROM social_tip_likes');
+    const milestoneLikesP = db.query('SELECT COUNT(*) AS totalMilestoneLikes FROM social_likes');
+
+    const [usersR, profilesR, countriesR, xpSummaryR, topXPUsersR, challengesR, enrollmentsR, scenariosR, emissionsTrendR, emissionsByCategoryR, tipsR, tipLikesR, milestoneLikesR] = await Promise.all([
+      usersP, profilesP, countriesP, xpSummaryP, topXPUsersP, challengesP, enrollmentsP, scenariosP, emissionsTrendP, emissionsByCategoryP, tipsP, tipLikesP, milestoneLikesP
+    ]);
+
+    const users = usersR[0][0] || { totalUsers: 0, activeUsers: 0 };
+    const profiles = profilesR[0][0] || { avgHousehold: 0, baselineCalculated: 0 };
+    const countries = (countriesR[0] || []).map(r => ({ country: r.country || 'Unknown', count: Number(r.count || 0) }));
+    const xpSummary = xpSummaryR[0][0] || { totalXP: 0, avgXP: 0 };
+    const topXPUsers = (topXPUsersR[0] || []).map(r => ({ id: r.id, username: r.username, xp: Number(r.xp_total || 0) }));
+    const challenges = challengesR[0][0] || { totalChallenges: 0, activeChallenges: 0 };
+    const enrollments = enrollmentsR[0][0] || { totalEnrollments: 0, completedEnrollments: 0 };
+    const scenarios = scenariosR[0][0] || { totalScenarios: 0, activeScenarios: 0 };
+    const emissionsTrend = (emissionsTrendR[0] || []).map(r => ({ day: r.day, total: Number(r.total || 0) }));
+    const emissionsByCategory = (emissionsByCategoryR[0] || []).map(r => ({ category: r.category || 'other', total: Number(r.total || 0) }));
+    const social = {
+      totalTips: Number(tipsR[0][0]?.totalTips || 0),
+      totalTipLikes: Number(tipLikesR[0][0]?.totalTipLikes || 0),
+      totalMilestoneLikes: Number(milestoneLikesR[0][0]?.totalMilestoneLikes || 0)
+    };
+
+    res.json({
+      status: 'success',
+      data: {
+        users,
+        profiles: {
+          avgHousehold: Number(profiles.avgHousehold || 0),
+          baselineCalculated: Number(profiles.baselineCalculated || 0),
+          countries
+        },
+        xp: {
+          totalXP: Number(xpSummary.totalXP || 0),
+          avgXP: Number(xpSummary.avgXP || 0),
+          topUsers: topXPUsers
+        },
+        challenges: {
+          totalChallenges: Number(challenges.totalChallenges || 0),
+          activeChallenges: Number(challenges.activeChallenges || 0),
+          totalEnrollments: Number(enrollments.totalEnrollments || 0),
+          completedEnrollments: Number(enrollments.completedEnrollments || 0)
+        },
+        scenarios: {
+          totalScenarios: Number(scenarios.totalScenarios || 0),
+          activeScenarios: Number(scenarios.activeScenarios || 0),
+          emissionsTrend,
+          emissionsByCategory
+        },
+        social
+      }
+    });
+  } catch (e) {
+    console.error('admin GET /analytics/overview error', e);
+    res.status(500).json({ status: 'error', message: 'Failed to load analytics overview' });
+  }
+});
+
+// --- Admin Analytics: Users-focused ---
+router.get('/analytics/users', async (req, res) => {
+  try {
+    const lastDays = Number(req.query.days || 30);
+
+    // User counts
+    const usersP = db.query(`
+      SELECT 
+        COUNT(*) AS totalUsers,
+        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS activeUsers
+      FROM users
+    `);
+
+    // Activities and emissions in window
+    const actWindowP = db.query(`
+      SELECT 
+        COUNT(*) AS totalActivities,
+        COALESCE(SUM(co2e_amount),0) AS totalEmissions
+      FROM scenario_activities
+      WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+    `, [lastDays]);
+
+    // Activity trend (count) and emissions trend (sum)
+    const activityTrendP = db.query(`
+      SELECT DATE(created_at) AS day, COUNT(*) AS count
+      FROM scenario_activities
+      WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+      GROUP BY DATE(created_at)
+      ORDER BY day
+    `, [lastDays]);
+    const emissionsTrendP = db.query(`
+      SELECT DATE(created_at) AS day, COALESCE(SUM(co2e_amount),0) AS total
+      FROM scenario_activities
+      WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+      GROUP BY DATE(created_at)
+      ORDER BY day
+    `, [lastDays]);
+
+    // Emissions by category (window)
+    const byCategoryP = db.query(`
+      SELECT category, COALESCE(SUM(co2e_amount),0) AS total
+      FROM scenario_activities
+      WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+      GROUP BY category
+      ORDER BY total DESC
+    `, [lastDays]);
+
+    // Top users by emissions in window
+    const topUsersEmissionsP = db.query(`
+      SELECT u.id, u.username, COALESCE(SUM(sa.co2e_amount),0) AS total
+      FROM scenario_activities sa
+      JOIN scenarios s ON sa.scenario_id = s.id
+      JOIN users u ON s.user_id = u.id
+      WHERE sa.created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+      GROUP BY u.id
+      ORDER BY total DESC
+      LIMIT 10
+    `, [lastDays]);
+
+    // Participation: enrollments and by type
+    const enrollmentsP = db.query(`
+      SELECT 
+        COUNT(*) AS totalEnrollments,
+        SUM(CASE WHEN completed = 1 THEN 1 ELSE 0 END) AS completedEnrollments,
+        COUNT(DISTINCT user_id) AS participants
+      FROM user_challenges
+    `);
+    const byChallengeTypeP = db.query(`
+      SELECT c.challenge_type, COUNT(*) AS count
+      FROM user_challenges uc
+      JOIN challenges c ON c.id = uc.challenge_id
+      GROUP BY c.challenge_type
+    `);
+
+    // Active participants in window (users who logged any activity)
+    const activeParticipantsP = db.query(`
+      SELECT COUNT(DISTINCT s.user_id) AS activeParticipants
+      FROM scenario_activities sa
+      JOIN scenarios s ON sa.scenario_id = s.id
+      WHERE sa.created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+    `, [lastDays]);
+
+    const [usersR, actWindowR, actTrendR, emTrendR, byCategoryR, topUsersEmissionsR, enrollmentsR, byTypeR, activeParticipantsR] = await Promise.all([
+      usersP, actWindowP, activityTrendP, emissionsTrendP, byCategoryP, topUsersEmissionsP, enrollmentsP, byChallengeTypeP, activeParticipantsP
+    ]);
+
+    const users = usersR[0][0] || { totalUsers: 0, activeUsers: 0 };
+    const window = actWindowR[0][0] || { totalActivities: 0, totalEmissions: 0 };
+    const activityTrend = (actTrendR[0] || []).map(r => ({ day: r.day, count: Number(r.count || 0) }));
+    const emissionsTrend = (emTrendR[0] || []).map(r => ({ day: r.day, total: Number(r.total || 0) }));
+    const category = (byCategoryR[0] || []).map(r => ({ category: r.category || 'other', total: Number(r.total || 0) }));
+    const topUsersEmissions = (topUsersEmissionsR[0] || []).map(r => ({ id: r.id, username: r.username, total: Number(r.total || 0) }));
+    const enrollments = enrollmentsR[0][0] || { totalEnrollments: 0, completedEnrollments: 0, participants: 0 };
+    const challengeTypes = (byTypeR[0] || []).map(r => ({ type: r.challenge_type || 'unknown', count: Number(r.count || 0) }));
+    const activeParticipants = Number(activeParticipantsR[0][0]?.activeParticipants || 0);
+
+    res.json({
+      status: 'success',
+      data: {
+        window: {
+          days: lastDays,
+          totalActivities: Number(window.totalActivities || 0),
+          totalEmissions: Number(window.totalEmissions || 0)
+        },
+        users: {
+          total: Number(users.totalUsers || 0),
+          active: Number(users.activeUsers || 0),
+          activeParticipants
+        },
+        participation: {
+          totalEnrollments: Number(enrollments.totalEnrollments || 0),
+          completedEnrollments: Number(enrollments.completedEnrollments || 0),
+          participants: Number(enrollments.participants || 0),
+          byType: challengeTypes
+        },
+        emissions: {
+          byCategory: category,
+          topUsers: topUsersEmissions,
+          dailyTotal: emissionsTrend
+        },
+        activityTrend
+      }
+    });
+  } catch (e) {
+    console.error('admin GET /analytics/users error', e);
+    res.status(500).json({ status: 'error', message: 'Failed to load users analytics' });
+  }
+});
 
 // --- Users ---
 router.get('/users', async (req, res) => {
@@ -500,6 +765,291 @@ router.post('/generate-challenge', async (req, res) => {
   } catch (e) {
     console.error('admin POST /generate-challenge error', e);
     res.status(500).json({ status: 'error', message: 'Failed to generate challenge' });
+  }
+});
+
+// --- Philippines Statistics via Climatiq (fallback to local factors) ---
+router.get('/climatiq-ph-stats', async (req, res) => {
+  try {
+    const apiKey = process.env.CLIMATIQ_API_KEY;
+
+    const buildResponse = (datasets, sourceLabel = 'climatiq') => {
+      // Normalize and pick top items per category
+      const normalize = (arr = [], take = 10) => arr
+        .map(item => ({
+          id: item.id || item.activity_id || item.name,
+          name: item.name || item.activity_name || item.activity_type || 'Unknown',
+          factor: Number(item.factor || item.co2e_per_unit || 0),
+          unit: item.unit_type || item.unit || '',
+          region: item.region || 'PH',
+          source: item.source || sourceLabel
+        }))
+        .filter(x => x.factor > 0)
+        .sort((a,b) => b.factor - a.factor)
+        .slice(0, take);
+
+      return {
+        status: 'success',
+        data: {
+          electricity: normalize(datasets.electricity, 3),
+          transport: normalize(datasets.transport, 10),
+          diet: normalize(datasets.diet, 10),
+          waste: normalize(datasets.waste, 10)
+        }
+      };
+    };
+
+    if (apiKey) {
+      try {
+        // Parallel search calls for PH region per category
+        const commonParams = { headers: { 'Authorization': `Bearer ${apiKey}` }, params: { year: 2024, region: 'PH' } };
+        const doSearch = async (params) => (await axios.get('https://api.climatiq.io/data/v1/search', params)).data?.results || [];
+        const electricityPH = await doSearch({ ...commonParams, params: { ...commonParams.params, query: 'electricity grid', category: 'electricity' } });
+        const transportPH  = await doSearch({ ...commonParams, params: { ...commonParams.params, category: 'transport' } });
+        const dietPH       = await doSearch({ ...commonParams, params: { ...commonParams.params, category: 'food' } });
+        const wastePH      = await doSearch({ ...commonParams, params: { ...commonParams.params, category: 'waste' } });
+
+        // Fallback to global if PH is empty per category
+        const commonGlobal = { headers: { 'Authorization': `Bearer ${apiKey}` }, params: { year: 2024 } };
+        const electricity = electricityPH.length ? electricityPH : await doSearch({ ...commonGlobal, params: { ...commonGlobal.params, query: 'electricity grid', category: 'electricity' } });
+        const transport  = transportPH.length  ? transportPH  : await doSearch({ ...commonGlobal, params: { ...commonGlobal.params, category: 'transport' } });
+        const diet       = dietPH.length       ? dietPH       : await doSearch({ ...commonGlobal, params: { ...commonGlobal.params, category: 'food' } });
+        const waste      = wastePH.length      ? wastePH      : await doSearch({ ...commonGlobal, params: { ...commonGlobal.params, category: 'waste' } });
+
+        const datasets = { electricity, transport, diet, waste };
+
+        return res.json(buildResponse(datasets, 'climatiq'));
+      } catch (apiErr) {
+        console.warn('Climatiq API failed, falling back to local factors:', apiErr.response?.data || apiErr.message);
+        // fall through to local fallback below
+      }
+    }
+
+    // Fallback to local DB emission_factors
+    const [rows] = await db.query('SELECT * FROM emission_factors');
+    const isPH = (r) => String(r.region || '').toLowerCase().includes('ph');
+    const orPH = rows.filter(isPH);
+    const pickElectricity = () => {
+      const pool = orPH.length ? orPH : rows;
+      const list = pool.filter(r => {
+        const cat = String(r.category || '').toLowerCase();
+        const act = String(r.activity_type || '').toLowerCase();
+        return cat.includes('energy') || cat.includes('electric') || act.includes('electric');
+      });
+      return list.map(r => ({ id: r.id, name: r.activity_type, factor: Number(r.co2e_per_unit||0), unit: r.unit, region: r.region||'' }));
+    };
+    const pickByCategory = (category) => {
+      const pool = orPH.length ? orPH : rows;
+      const list = pool.filter(r => String(r.category || '').toLowerCase().includes(category));
+      return list.map(r => ({ id: r.id, name: r.activity_type, factor: Number(r.co2e_per_unit||0), unit: r.unit, region: r.region||'' }));
+    };
+    const datasets = {
+      electricity: pickElectricity(),
+      transport: pickByCategory('transport'),
+      diet: pickByCategory('diet'),
+      waste: pickByCategory('waste')
+    };
+
+    // If waste is empty locally, provide simple defaults so the chart isn't blank
+    if (!datasets.waste.length) {
+      datasets.waste = [
+        { id: 'waste_landfill_mixed', name: 'Landfill (mixed waste)', factor: 0.45, unit: 'kg_per_kg', region: 'global', source: 'local-default' },
+        { id: 'waste_incineration_mixed', name: 'Incineration (mixed waste)', factor: 0.70, unit: 'kg_per_kg', region: 'global', source: 'local-default' },
+        { id: 'waste_composting_food', name: 'Composting (food waste)', factor: 0.10, unit: 'kg_per_kg', region: 'global', source: 'local-default' }
+      ];
+    }
+    return res.json(buildResponse(datasets, orPH.length ? 'local-ph' : 'local-global'));
+  } catch (e) {
+    console.error('admin GET /climatiq-ph-stats error', e.response?.data || e.message);
+    res.status(500).json({ status: 'error', message: 'Failed to load Philippines stats' });
+  }
+});
+
+// --- Philippines Sector Statistics (multi-category) ---
+router.get('/ph-sector-stats', async (req, res) => {
+  try {
+    const apiKey = process.env.CLIMATIQ_API_KEY;
+    const inputCats = (req.query.categories || '').split(',').map(s => s.trim()).filter(Boolean);
+    const categories = inputCats.length ? inputCats : [
+      'Agriculture/Hunting/Forestry/Fishing',
+      'Buildings and Infrastructure',
+      'Consumer Goods and Service',
+      'Education',
+      'Energy',
+      'Equipment',
+      'Health and Social Care',
+      'Information and Communication',
+      'Insurance and Financial Service',
+      'Land Use',
+      'Materials and Manufacturing',
+      'Organizational Activities',
+      'Restaurants and Accomodation',
+      'Transport',
+      'Waste',
+      'Water'
+    ];
+
+    // Normalize keys and provide query synonyms for better search coverage
+    const norm = (s='') => s.toLowerCase().trim();
+    const SEARCH_MAP = {
+      'energy': ['electricity grid','electricity','grid intensity','power generation'],
+      'transport': ['transport','road transport','public transport','freight'],
+      'waste': ['waste','waste disposal','landfill','incineration','recycling'],
+      'water': ['water supply','wastewater treatment','water treatment'],
+      'agriculture/hunting/forestry/fishing': ['agriculture','crop production','livestock','forestry','fishing'],
+      'buildings and infrastructure': ['construction','construction materials','cement','steel'],
+      'consumer goods and service': ['consumer goods','retail services','household goods'],
+      'education': ['education services','schools','universities'],
+      'equipment': ['equipment manufacturing','machinery','electronics manufacturing'],
+      'health and social care': ['healthcare services','hospitals','medical services'],
+      'information and communication': ['information and communication technology','ict','data centers','telecommunications'],
+      'insurance and financial service': ['financial services','banking','insurance'],
+      'land use': ['land use','land use change','luluCF'],
+      'materials and manufacturing': ['manufacturing','materials production','industrial processes'],
+      'organizational activities': ['business operations','office operations','corporate services'],
+      'restaurants and accomodation': ['restaurants and accommodation','accommodation','hospitality']
+    };
+
+    // Local DB mapping to our known categories
+    const LOCAL_MAP = {
+      'energy': ['energy','electric'],
+      'transport': ['transport'],
+      'waste': ['waste'],
+      'agriculture/hunting/forestry/fishing': ['diet'],
+      'materials and manufacturing': ['energy'],
+      'restaurants and accomodation': ['diet','energy']
+    };
+
+    const normalize = (arr = [], sourceLabel = 'climatiq') => (arr || [])
+      .map(item => ({
+        id: item.id || item.activity_id || item.name,
+        name: item.name || item.activity_name || item.activity_type || 'Unknown',
+        factor: Number(item.factor || item.co2e_per_unit || 0),
+        unit: item.unit_type || item.unit || '',
+        region: item.region || 'PH',
+        source: item.source || sourceLabel
+      }))
+      .filter(x => x.factor > 0)
+      .sort((a,b) => b.factor - a.factor)
+      .slice(0, 10);
+
+    const fetchCategory = async (cat) => {
+      // Helper that tries category param first then query fallback
+      const tryClimatiq = async () => {
+        if (!apiKey) return null;
+        const headers = { headers: { 'Authorization': `Bearer ${apiKey}` } };
+        const basePH = { ...headers, params: { year: 2024, region: 'PH' } };
+        const baseGlobal = { ...headers, params: { year: 2024 } };
+        const search = async (cfg) => {
+          try { return (await axios.get('https://api.climatiq.io/data/v1/search', cfg)).data?.results || []; }
+          catch { return []; }
+        };
+        // 1) Try with category param
+        let results = await search({ ...basePH, params: { ...basePH.params, category: cat } });
+        // 2) Try with raw query
+        if (!results.length) results = await search({ ...basePH, params: { ...basePH.params, query: cat } });
+        // 3) Try with mapped query synonym(s)
+        const mapped = SEARCH_MAP[norm(cat)];
+        if (!results.length && mapped) {
+          const list = Array.isArray(mapped) ? mapped : [mapped];
+          for (const term of list) {
+            results = await search({ ...basePH, params: { ...basePH.params, query: term } });
+            if (results.length) break;
+          }
+        }
+        // 4) Global fallback with mapped or raw
+        if (!results.length && mapped) {
+          const list = Array.isArray(mapped) ? mapped : [mapped];
+          for (const term of list) {
+            results = await search({ ...baseGlobal, params: { ...baseGlobal.params, query: term } });
+            if (results.length) break;
+          }
+        }
+        if (!results.length) results = await search({ ...baseGlobal, params: { ...baseGlobal.params, query: cat } });
+        return results;
+      };
+
+      const results = await tryClimatiq();
+      if (results && results.length) return normalize(results, 'climatiq');
+      // Climatiq-only: no local fallback, return empty
+      return [];
+    };
+
+    // If no API key, return success with empty arrays and missing list
+    if (!apiKey) {
+      const empty = categories.reduce((acc, c) => { acc[c] = []; return acc; }, {});
+      return res.json({ status: 'success', data: { categories: empty, missingCategories: categories }, message: 'CLIMATIQ_API_KEY not set. Showing no data by request (Climatiq-only).' });
+    }
+
+    // Fetch all categories in parallel
+    const pairs = await Promise.all(categories.map(async (cat) => [cat, await fetchCategory(cat)]));
+    const data = pairs.reduce((acc, [cat, items]) => { acc[cat] = items; return acc; }, {});
+    const missing = Object.entries(data).filter(([, items]) => !items || !items.length).map(([cat]) => cat);
+    res.json({ status: 'success', data: { categories: data, missingCategories: missing } });
+  } catch (e) {
+    console.error('admin GET /ph-sector-stats error', e.response?.data || e.message);
+    res.status(500).json({ status: 'error', message: 'Failed to load sector stats' });
+  }
+});
+
+// --- Philippines fixed activity estimates (Climatiq-only) ---
+router.get('/ph-sector-estimates', async (req, res) => {
+  try {
+    const apiKey = process.env.CLIMATIQ_API_KEY;
+    if (!apiKey) {
+      return res.json({ status: 'success', data: { items: [], missingActivities: [
+        'agriculture_fishing_forestry-type_support_activities_for_agriculture_and_forestry',
+        'arable_farming-type_fruit_and_tree_nut_farming',
+        'building_materials-type_cement_production',
+        'consumer_goods_rental-type_general_and_consumer_goods_rental',
+        'electrical_equipment-type_all_other_miscellaneous_electrical_equipment_and_component',
+        'electricity-supply_grid-source_production_mix',
+        'metal_products-type_all_other_forging_stamping_sintering',
+        'fishing_aquaculture-type_fishing_hunting_and_trapping',
+        'consumer_services-type_all_other_food_drinking_places',
+        'fuel-type_coal_mining-fuel_use_na',
+        'fuel-type_other_petroleum_and_coal_products_manufacturing-fuel_use_na'
+      ] }, message: 'CLIMATIQ_API_KEY not set. Climatiq-only mode.' });
+    }
+
+    const money = Number(req.query.money || 500);
+    const unit = String(req.query.unit || 'usd').toLowerCase();
+    const items = [
+      { id: 'agriculture_fishing_forestry-type_support_activities_for_agriculture_and_forestry', label: 'Agriculture support activities' },
+      { id: 'arable_farming-type_fruit_and_tree_nut_farming', label: 'Fruit & tree nut farming' },
+      { id: 'building_materials-type_cement_production', label: 'Cement production' },
+      { id: 'consumer_goods_rental-type_general_and_consumer_goods_rental', label: 'Consumer goods rental' },
+      { id: 'electrical_equipment-type_all_other_miscellaneous_electrical_equipment_and_component', label: 'Electrical equipment (misc)' },
+      { id: 'electricity-supply_grid-source_production_mix', label: 'Grid electricity mix' },
+      { id: 'metal_products-type_all_other_forging_stamping_sintering', label: 'Metal products (forging/stamping)' },
+      { id: 'fishing_aquaculture-type_fishing_hunting_and_trapping', label: 'Fishing, hunting & trapping' },
+      { id: 'consumer_services-type_all_other_food_drinking_places', label: 'Food & drinking places' },
+      { id: 'fuel-type_coal_mining-fuel_use_na', label: 'Coal mining (fuel use)' },
+      { id: 'fuel-type_other_petroleum_and_coal_products_manufacturing-fuel_use_na', label: 'Other petroleum/coal (fuel use)' }
+    ];
+
+    const headers = { headers: { Authorization: `Bearer ${apiKey}` } };
+    const bodyFor = (activity_id) => ({
+      emission_factor: { activity_id, data_version: '^0' },
+      parameters: { money, money_unit: unit }
+    });
+
+    const results = await Promise.all(items.map(async (it) => {
+      try {
+        const resp = await axios.post('https://api.climatiq.io/data/v1/estimate', bodyFor(it.id), headers);
+        const r = resp.data || {};
+        return { ...it, co2e: Number(r.co2e || 0), co2e_unit: r.co2e_unit || 'kg' };
+      } catch (e) {
+        return null;
+      }
+    }));
+
+    const ok = results.filter(Boolean);
+    const missing = items.filter((_, idx) => results[idx] === null).map(x => x.id);
+    res.json({ status: 'success', data: { items: ok, missingActivities: missing, money, unit } });
+  } catch (e) {
+    console.error('admin GET /ph-sector-estimates error', e.response?.data || e.message);
+    res.status(500).json({ status: 'error', message: 'Failed to load estimates' });
   }
 });
 

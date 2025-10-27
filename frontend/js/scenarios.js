@@ -50,7 +50,8 @@ async function loadScenarios() {
     displayScenarios(data.data);
   } catch (error) {
     console.error('Error loading scenarios:', error);
-    alert('Failed to load scenarios');
+    if (window.notify?.error) window.notify.error('Failed to load scenarios');
+    else alert('Failed to load scenarios');
   }
 }
 
@@ -231,7 +232,8 @@ if (createForm) {
       } catch (_) {}
     } catch (error) {
       console.error('Error creating scenario:', error);
-      alert('Failed to create scenario');
+      if (window.notify?.error) window.notify.error('Failed to create scenario');
+      else alert('Failed to create scenario');
     }
   });
 }
@@ -249,11 +251,13 @@ if (addActForm) {
 
     // explicit validation to avoid hidden required issues
     if (!category) {
-      alert('Please select a category');
+      if (window.notify?.warning) window.notify.warning('Please select a category');
+      else alert('Please select a category');
       return;
     }
     if (!activity_type) {
-      alert('Please select an activity type');
+      if (window.notify?.warning) window.notify.warning('Please select an activity type');
+      else alert('Please select an activity type');
       return;
     }
     // Auto-resolve unit if not explicitly selected (single-unit activities)
@@ -267,11 +271,13 @@ if (addActForm) {
     }
 
     if (!unit) {
-      alert('Unit unavailable for the selected activity. Please pick another activity.');
+      if (window.notify?.warning) window.notify.warning('Unit unavailable for the selected activity. Please pick another activity.');
+      else alert('Unit unavailable for the selected activity. Please pick another activity.');
       return;
     }
     if (!value || isNaN(value) || value <= 0) {
-      alert('Please enter a valid value greater than 0');
+      if (window.notify?.warning) window.notify.warning('Please enter a valid value greater than 0');
+      else alert('Please enter a valid value greater than 0');
       return;
     }
 
@@ -302,7 +308,8 @@ if (addActForm) {
       } catch (_) {}
     } catch (error) {
       console.error('Error adding activity:', error);
-      alert('Failed to add activity');
+      if (window.notify?.error) window.notify.error('Failed to add activity');
+      else alert('Failed to add activity');
     }
   });
 }
@@ -562,7 +569,8 @@ async function deleteScenario(scenarioId) {
     } catch (_) {}
   } catch (error) {
     console.error('Error deleting scenario:', error);
-    alert('Failed to delete scenario');
+    if (window.notify?.error) window.notify.error('Failed to delete scenario');
+    else alert('Failed to delete scenario');
   }
 }
 

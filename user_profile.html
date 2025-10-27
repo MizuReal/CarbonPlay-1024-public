@@ -7,6 +7,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <link rel="stylesheet" href="frontend/dist/styles.css">
+    <script src="frontend/js/admin-notify.js"></script>
 </head>
 <body data-theme="forest">
     <div id="navbar-placeholder"></div>
@@ -325,14 +326,18 @@
         }
 
         function showAlert(message, type) {
+            // Prefer global toast notifier when available
+            if (window.notify) {
+                const fn = type === 'success' ? window.notify.success : type === 'warning' ? window.notify.warning : window.notify.error;
+                fn(message);
+                return;
+            }
+            // Fallback to inline alert banner
             const alert = document.getElementById('alertMessage');
             alert.textContent = message;
-            alert.className = `alert ${type === 'success' ? 'alert-success' : 'alert-error'}`;
+            alert.className = `alert ${type === 'success' ? 'alert-success' : type === 'warning' ? 'alert-warning' : 'alert-error'}`;
             alert.classList.remove('hidden');
-            
-            setTimeout(() => {
-                alert.classList.add('hidden');
-            }, 5000);
+            setTimeout(() => { alert.classList.add('hidden'); }, 5000);
         }
     </script>
 </body>

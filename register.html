@@ -61,6 +61,7 @@
         </div>
     </main>
 
+    <script src="frontend/js/admin-notify.js"></script>
     <script>
         document.getElementById('registerForm').addEventListener('submit', async function(e) {
             e.preventDefault();
@@ -72,7 +73,8 @@
             const confirmPassword = document.getElementById('confirmPassword').value;
             
             if (password !== confirmPassword) {
-                alert('Passwords do not match!');
+                if (window.notify?.warning) window.notify.warning('Passwords do not match!');
+                else alert('Passwords do not match!');
                 return;
             }
             
@@ -93,14 +95,17 @@
                 const data = await response.json();
                 
                 if (response.ok) {
-                    alert('Registration successful! Please log in.');
+                    // Persist a flash message so the user sees it on the next page
+                    try { sessionStorage.setItem('flashMessage', 'account sucessfully created'); } catch (_) {}
                     window.location.href = 'login.html';
                 } else {
-                    alert(data.message || 'Registration failed. Please try again.');
+                    if (window.notify?.error) window.notify.error(data.message || 'Registration failed. Please try again.');
+                    else alert(data.message || 'Registration failed. Please try again.');
                 }
             } catch (error) {
                 console.error('Error:', error);
-                alert('An error occurred during registration. Please try again.');
+                if (window.notify?.error) window.notify.error('An error occurred during registration. Please try again.');
+                else alert('An error occurred during registration. Please try again.');
             }
         });
     </script>

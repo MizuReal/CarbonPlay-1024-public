@@ -52,7 +52,8 @@ async function fetchUserProfile() {
     }
   } catch (error) {
     console.error('Error fetching user profile:', error);
-    alert('Your session has expired. Please log in again.');
+    if (window.notify?.error) window.notify.error('Your session has expired. Please log in again.');
+    else alert('Your session has expired. Please log in again.');
     localStorage.removeItem('token');
     window.location.href = 'login.html';
   }
@@ -578,7 +579,8 @@ async function joinChallenge(challengeId) {
     await loadChallengesList();
     if (typeof loadUserStats === 'function') loadUserStats();
   } catch (e) {
-    alert(e.message || 'Failed to join challenge');
+    if (window.notify?.error) window.notify.error(e.message || 'Failed to join challenge');
+    else alert(e.message || 'Failed to join challenge');
   }
 }
 
@@ -698,75 +700,56 @@ window.initTipsModalUI = initTipsModalUI;
 let carbonChartInstance = null;
 
 async function initCarbonChart() {
-  const canvas = document.getElementById('carbonChart');
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  
-  // Fetch last 7 days of activity data
+  const container = document.getElementById('carbonChart');
+  if (!container) return;
+
+  // Destroy existing chart if present
+  if (carbonChartInstance && typeof carbonChartInstance.destroy === 'function') {
+    try { carbonChartInstance.destroy(); } catch (_) {}
+    carbonChartInstance = null;
+  }
+
+  // Fetch last 7 days of activity data and render with ApexCharts
   const token = localStorage.getItem('token');
   try {
     const res = await fetch('http://localhost:3000/api/stats/weekly-chart', {
       headers: { Authorization: `Bearer ${token}` }
     });
     const data = await res.json();
-    
+
     const labels = data?.data?.labels || ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     const values = data?.data?.values || [0, 0, 0, 0, 0, 0, 0];
-    
-    carbonChartInstance = new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels,
-        datasets: [{
-          label: 'Daily CO₂e (kg)',
-          data: values,
-          backgroundColor: 'rgba(34, 197, 94, 0.6)',
-          borderColor: 'rgba(34, 197, 94, 1)',
-          borderWidth: 1
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false }
-        },
-        scales: {
-          y: {
-            beginAtZero: true,
-            ticks: { color: '#9ca3af' },
-            grid: { color: 'rgba(156, 163, 175, 0.1)' }
-          },
-          x: {
-            ticks: { color: '#9ca3af' },
-            grid: { display: false }
-          }
-        }
-      }
-    });
+
+    const options = {
+      chart: { type: 'bar', height: '100%', toolbar: { show: false } },
+      series: [{ name: 'Daily CO₂e (kg)', data: values }],
+      xaxis: { categories: labels, labels: { style: { colors: '#9ca3af' } } },
+      yaxis: { labels: { style: { colors: '#9ca3af' } }, min: 0 },
+      plotOptions: { bar: { borderRadius: 6, columnWidth: '50%' } },
+      dataLabels: { enabled: false },
+      colors: ['#22c55e'],
+      grid: { borderColor: 'rgba(156,163,175,0.08)' },
+      tooltip: { y: { formatter: (val) => `${val} kg` } },
+      responsive: [{ breakpoint: 640, options: { plotOptions: { bar: { columnWidth: '70%' } } } }]
+    };
+
+    carbonChartInstance = new ApexCharts(container, options);
+    await carbonChartInstance.render();
   } catch (e) {
     console.error('Failed to load chart data:', e);
-    // Fallback: render empty chart
-    carbonChartInstance = new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-        datasets: [{
-          label: 'Daily CO₂e (kg)',
-          data: [0, 0, 0, 0, 0, 0, 0],
-          backgroundColor: 'rgba(156, 163, 175, 0.3)'
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          y: { beginAtZero: true, ticks: { color: '#9ca3af' }, grid: { color: 'rgba(156, 163, 175, 0.1)' } },
-          x: { ticks: { color: '#9ca3af' }, grid: { display: false } }
-        }
-      }
-    });
+    // fallback: render an empty chart
+    const options = {
+      chart: { type: 'bar', height: '100%', toolbar: { show: false } },
+      series: [{ name: 'Daily CO₂e (kg)', data: [0, 0, 0, 0, 0, 0, 0] }],
+      xaxis: { categories: ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'], labels: { style: { colors: '#9ca3af' } } },
+      yaxis: { labels: { style: { colors: '#9ca3af' } }, min: 0 },
+      plotOptions: { bar: { borderRadius: 6, columnWidth: '50%' } },
+      dataLabels: { enabled: false },
+      colors: ['rgba(156,163,175,0.4)'],
+      grid: { borderColor: 'rgba(156,163,175,0.08)' }
+    };
+    carbonChartInstance = new ApexCharts(container, options);
+    await carbonChartInstance.render();
   }
 }
 
@@ -1139,6 +1122,13 @@ function getTrackerHelpText(challengeType, dailyGoal) {
 }
 
 function showToast(message, type = 'info') {
+  // Delegate to global notifier when available
+  if (window.notify) {
+    const fn = type === 'success' ? window.notify.success : type === 'warning' ? window.notify.warning : type === 'error' ? window.notify.error : window.notify.info;
+    fn(message, 3000);
+    return;
+  }
+  // Fallback minimal inline toast
   const toast = document.createElement('div');
   toast.className = `alert alert-${type} fixed top-4 right-4 w-96 z-[100] shadow-lg`;
   toast.innerHTML = `
