@@ -11,8 +11,15 @@ function initScenariosUI() {
   // Kick off data loads
   loadScenarios();
   loadUserStats();
+  loadUserBadgesForScenarios();
   loadEmissionFactors();
   relaxHiddenSelectValidation();
+
+  // Refresh header stats/badges when scenarios or activities change
+  window.addEventListener('scenarios:updated', () => {
+    loadUserStats();
+    loadUserBadgesForScenarios();
+  });
 }
 
 // Run immediately if DOM is already ready; otherwise wait
@@ -32,6 +39,7 @@ window.calculatePreview = calculatePreview;
 window.loadScenarios = loadScenarios;
 window.loadEmissionFactors = loadEmissionFactors;
 window.loadUserStats = loadUserStats;
+window.loadUserBadgesForScenarios = loadUserBadgesForScenarios;
 
 async function loadScenarios() {
   try {
@@ -150,8 +158,10 @@ async function loadUserStats() {
     // Update counts
     const scEl = document.getElementById('scenariosCount');
     const acEl = document.getElementById('activitiesCount');
+    const acElScn = document.getElementById('activitiesCountScn');
     if (scEl) scEl.textContent = s.scenarios ?? 0;
     if (acEl) acEl.textContent = s.activities ?? 0;
+    if (acElScn) acElScn.textContent = s.activities ?? 0;
 
     // Update XP
     const xpCur = document.getElementById('xpCurrent');
@@ -164,8 +174,48 @@ async function loadUserStats() {
     if (xpCur) xpCur.textContent = xpInLevel;
     if (xpMax) xpMax.textContent = levelSize;
     if (xpBar) xpBar.value = Math.max(0, Math.min(100, pct));
+
+    // Show current level in scenarios header
+    const lvlEl = document.getElementById('xpLevelScn');
+    const level = Number(s.level || Math.floor(xpTotal / (levelSize || 1)) + 1);
+    if (lvlEl) lvlEl.textContent = String(level);
   } catch (e) {
     console.error('Error loading stats:', e);
+  }
+}
+
+// Render earned badges in scenarios header
+async function loadUserBadgesForScenarios() {
+  const bar = document.getElementById('earnedBadgesBarScn');
+  if (!bar) return;
+  try {
+    const token = localStorage.getItem('token');
+    const res = await fetch('http://localhost:3000/api/auth/me/badges', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error('Failed to load badges');
+    const payload = await res.json();
+    if (payload.status !== 'success') throw new Error(payload.message || 'Failed');
+    const all = Array.isArray(payload.data?.badges) ? payload.data.badges : [];
+    // Sort earned badges by required level descending to highlight highest achievements
+    const earned = all.filter((b) => b && b.earned).sort((a, b) => (b.level_required || 0) - (a.level_required || 0));
+
+    if (!earned.length) {
+      bar.innerHTML = '<span class="badge badge-ghost"><i class="fas fa-circle-info mr-1"></i>No badges yet</span>';
+      return;
+    }
+
+    const items = earned.slice(0, 3).map((b) => {
+      const icon = b.icon || '🏅';
+      const name = escapeHtml(String(b.name || 'Badge'));
+      return `<span class="badge badge-success badge-outline" title="${name}"><span class="mr-1">${icon}</span>${name}</span>`;
+    });
+    if (earned.length > 3) {
+      items.push(`<span class="badge badge-ghost" title="${earned.length} total">+${earned.length - 3} more</span>`);
+    }
+    bar.innerHTML = items.join('');
+  } catch (e) {
+    bar.innerHTML = '<span class="badge badge-ghost"><i class="fas fa-exclamation-circle mr-1"></i>Badges unavailable</span>';
   }
 }
 
@@ -589,3 +639,13 @@ window.onclick = function (event) {
 };
 
 // Logout handled by shared navbar
+
+// Minimal HTML escaper (scenarios page scope)
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}

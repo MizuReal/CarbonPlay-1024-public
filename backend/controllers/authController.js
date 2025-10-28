@@ -1,6 +1,7 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const db = require('../config/database');
+const { getXpWithLevel } = require('../utils/xp');
 
 // Helper function to generate JWT token
 const generateToken = (userId, remember = false) => {
@@ -294,5 +295,45 @@ exports.uploadProfilePicture = async (req, res) => {
       status: 'error',
       message: 'An error occurred while uploading profile picture'
     });
+  }
+};
+
+// Get current user's badges based on level
+exports.getMyBadges = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    // Compute level from XP
+    const xpInfo = await getXpWithLevel(userId);
+    const level = xpInfo.level || 1;
+
+    // Minimal badge catalog with level thresholds
+    const badgeCatalog = [
+      { key: 'sprout', name: 'Starter Seed', level_required: 1, icon: '🌱' },
+      { key: 'leaf_learner', name: 'Leaf Learner', level_required: 3, icon: '🍃' },
+      { key: 'green_rookie', name: 'Green Rookie', level_required: 5, icon: '🟢' },
+      { key: 'eco_explorer', name: 'Eco Explorer', level_required: 10, icon: '🧭' },
+      { key: 'carbon_cutter', name: 'Carbon Cutter', level_required: 15, icon: '✂️' },
+      { key: 'planet_protector', name: 'Planet Protector', level_required: 20, icon: '🛡️' }
+    ];
+
+    const badges = badgeCatalog.map(b => ({
+      key: b.key,
+      name: b.name,
+      level_required: b.level_required,
+      icon: b.icon,
+      earned: level >= b.level_required
+    }));
+
+    return res.status(200).json({
+      status: 'success',
+      data: {
+        level,
+        xp_total: xpInfo.xp_total,
+        badges
+      }
+    });
+  } catch (error) {
+    console.error('getMyBadges error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to load badges' });
   }
 };

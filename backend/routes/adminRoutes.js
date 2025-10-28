@@ -4,6 +4,7 @@ const axios = require('axios');
 const router = express.Router();
 const db = require('../config/database');
 const { authenticate, authorizeAdmin } = require('../middlewares/auth');
+const { generatePdfFromHtml } = require('../utils/pdfGenerator');
 
 // Protect all admin routes (optionally add admin-role check later)
 router.use(authenticate);
@@ -143,6 +144,138 @@ router.get('/analytics/overview', async (req, res) => {
   }
 });
 
+// --- Admin Analytics Overview: Download as PDF ---
+router.get('/analytics/overview/pdf', async (req, res) => {
+  try {
+    // Reuse the same data as /analytics/overview
+    const usersP = db.query(`
+      SELECT 
+        COUNT(*) AS totalUsers,
+        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS activeUsers
+      FROM users
+    `);
+    const profilesP = db.query(`
+      SELECT 
+        AVG(household_size) AS avgHousehold,
+        SUM(CASE WHEN baseline_calculated = 1 THEN 1 ELSE 0 END) AS baselineCalculated
+      FROM user_profiles
+    `);
+    const countriesP = db.query(`
+      SELECT country, COUNT(*) AS count
+      FROM user_profiles
+      GROUP BY country
+      ORDER BY count DESC
+      LIMIT 10
+    `);
+    const xpSummaryP = db.query(`
+      SELECT COALESCE(SUM(xp_total),0) AS totalXP, COALESCE(AVG(xp_total),0) AS avgXP FROM user_xp
+    `);
+    const topXPUsersP = db.query(`
+      SELECT u.username, x.xp_total
+      FROM user_xp x
+      JOIN users u ON u.id = x.user_id
+      ORDER BY x.xp_total DESC
+      LIMIT 10
+    `);
+    const challengesP = db.query(`
+      SELECT 
+        COUNT(*) AS totalChallenges,
+        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS activeChallenges
+      FROM challenges
+    `);
+    const enrollmentsP = db.query(`
+      SELECT 
+        COUNT(*) AS totalEnrollments,
+        SUM(CASE WHEN completed = 1 THEN 1 ELSE 0 END) AS completedEnrollments
+      FROM user_challenges
+    `);
+    const scenariosP = db.query(`
+      SELECT 
+        COUNT(*) AS totalScenarios,
+        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS activeScenarios
+      FROM scenarios
+    `);
+    const emissionsByCategoryP = db.query(`
+      SELECT category, COALESCE(SUM(co2e_amount),0) AS total
+      FROM scenario_activities
+      WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+      GROUP BY category
+      ORDER BY total DESC
+    `);
+
+    const [usersR, profilesR, countriesR, xpSummaryR, topXPUsersR, challengesR, enrollmentsR, scenariosR, emissionsByCategoryR] = await Promise.all([
+      usersP, profilesP, countriesP, xpSummaryP, topXPUsersP, challengesP, enrollmentsP, scenariosP, emissionsByCategoryP
+    ]);
+
+    const users = usersR[0][0] || { totalUsers: 0, activeUsers: 0 };
+    const profiles = profilesR[0][0] || { avgHousehold: 0, baselineCalculated: 0 };
+    const countries = (countriesR[0] || []).map(r => ({ country: r.country || 'Unknown', count: Number(r.count || 0) }));
+    const xpSummary = xpSummaryR[0][0] || { totalXP: 0, avgXP: 0 };
+    const topXPUsers = (topXPUsersR[0] || []).map(r => ({ username: r.username, xp: Number(r.xp_total || 0) }));
+    const challenges = challengesR[0][0] || { totalChallenges: 0, activeChallenges: 0 };
+    const enrollments = enrollmentsR[0][0] || { totalEnrollments: 0, completedEnrollments: 0 };
+    const scenarios = scenariosR[0][0] || { totalScenarios: 0, activeScenarios: 0 };
+    const emissionsByCategory = (emissionsByCategoryR[0] || []).map(r => ({ category: r.category || 'other', total: Number(r.total || 0) }));
+
+    // Build simple printable HTML
+    const html = `
+      <!doctype html>
+      <html><head><meta charset="utf-8" />
+        <title>Analytics Overview Report</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 24px; }
+          h1 { margin: 0 0 8px; }
+          h2 { margin: 24px 0 8px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+          th, td { border: 1px solid #ddd; padding: 8px; font-size: 12px; }
+          th { background: #f3f4f6; text-align: left; }
+          .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+          .card { border: 1px solid #e5e7eb; padding: 12px; border-radius: 6px; }
+          .muted { color: #6b7280; font-size: 12px; }
+        </style>
+      </head><body>
+        <h1>Analytics Overview</h1>
+        <div class="muted">Generated ${new Date().toLocaleString()}</div>
+        <div class="kpis">
+          <div class="card"><div>Total Users</div><div><b>${Number(users.totalUsers||0).toLocaleString()}</b> <span class="muted">(${Number(users.activeUsers||0)} active)</span></div></div>
+          <div class="card"><div>Scenarios</div><div><b>${Number(scenarios.totalScenarios||0).toLocaleString()}</b> <span class="muted">(${Number(scenarios.activeScenarios||0)} active)</span></div></div>
+          <div class="card"><div>Challenges</div><div><b>${Number(challenges.totalChallenges||0).toLocaleString()}</b> <span class="muted">(${Number(challenges.activeChallenges||0)} active)</span></div></div>
+          <div class="card"><div>Total XP</div><div><b>${Number(xpSummary.totalXP||0).toLocaleString()}</b></div></div>
+        </div>
+
+        <h2>Emissions by Category (30 days)</h2>
+        <table><thead><tr><th>Category</th><th>kg CO₂e</th></tr></thead>
+          <tbody>
+            ${emissionsByCategory.map(x => `<tr><td>${x.category}</td><td>${x.total.toFixed(2)}</td></tr>`).join('')}
+          </tbody>
+        </table>
+
+        <h2>Users by Country (top 10)</h2>
+        <table><thead><tr><th>Country</th><th>Users</th></tr></thead>
+          <tbody>
+            ${countries.map(x => `<tr><td>${x.country}</td><td>${x.count}</td></tr>`).join('')}
+          </tbody>
+        </table>
+
+        <h2>Top Users by XP</h2>
+        <table><thead><tr><th>User</th><th>XP</th></tr></thead>
+          <tbody>
+            ${topXPUsers.map(u => `<tr><td>${u.username}</td><td>${u.xp.toLocaleString()}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </body></html>
+    `;
+
+    const pdf = await generatePdfFromHtml(html);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="analytics-overview.pdf"');
+    res.send(pdf);
+  } catch (e) {
+    console.error('admin GET /analytics/overview/pdf error', e);
+    res.status(500).json({ status: 'error', message: 'Failed to generate PDF' });
+  }
+});
+
 // --- Admin Analytics: Users-focused ---
 router.get('/analytics/users', async (req, res) => {
   try {
@@ -269,6 +402,146 @@ router.get('/analytics/users', async (req, res) => {
   } catch (e) {
     console.error('admin GET /analytics/users error', e);
     res.status(500).json({ status: 'error', message: 'Failed to load users analytics' });
+  }
+});
+
+// --- Admin Users Analytics: Download as PDF ---
+router.get('/analytics/users/pdf', async (req, res) => {
+  try {
+    const lastDays = Number(req.query.days || 30);
+
+    const usersP = db.query(`
+      SELECT 
+        COUNT(*) AS totalUsers,
+        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS activeUsers
+      FROM users
+    `);
+    const actWindowP = db.query(`
+      SELECT 
+        COUNT(*) AS totalActivities,
+        COALESCE(SUM(co2e_amount),0) AS totalEmissions
+      FROM scenario_activities
+      WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+    `, [lastDays]);
+    const emissionsTrendP = db.query(`
+      SELECT DATE(created_at) AS day, COALESCE(SUM(co2e_amount),0) AS total
+      FROM scenario_activities
+      WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+      GROUP BY DATE(created_at)
+      ORDER BY day
+    `, [lastDays]);
+    const byCategoryP = db.query(`
+      SELECT category, COALESCE(SUM(co2e_amount),0) AS total
+      FROM scenario_activities
+      WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+      GROUP BY category
+      ORDER BY total DESC
+    `, [lastDays]);
+    const topUsersEmissionsP = db.query(`
+      SELECT u.username, COALESCE(SUM(sa.co2e_amount),0) AS total
+      FROM scenario_activities sa
+      JOIN scenarios s ON sa.scenario_id = s.id
+      JOIN users u ON s.user_id = u.id
+      WHERE sa.created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+      GROUP BY u.id
+      ORDER BY total DESC
+      LIMIT 10
+    `, [lastDays]);
+    const enrollmentsP = db.query(`
+      SELECT 
+        COUNT(*) AS totalEnrollments,
+        SUM(CASE WHEN completed = 1 THEN 1 ELSE 0 END) AS completedEnrollments,
+        COUNT(DISTINCT user_id) AS participants
+      FROM user_challenges
+    `);
+    const byChallengeTypeP = db.query(`
+      SELECT c.challenge_type, COUNT(*) AS count
+      FROM user_challenges uc
+      JOIN challenges c ON c.id = uc.challenge_id
+      GROUP BY c.challenge_type
+    `);
+    const activeParticipantsP = db.query(`
+      SELECT COUNT(DISTINCT s.user_id) AS activeParticipants
+      FROM scenario_activities sa
+      JOIN scenarios s ON sa.scenario_id = s.id
+      WHERE sa.created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+    `, [lastDays]);
+
+    const [usersR, actWindowR, emTrendR, byCategoryR, topUsersEmissionsR, enrollmentsR, byTypeR, activeParticipantsR] = await Promise.all([
+      usersP, actWindowP, emissionsTrendP, byCategoryP, topUsersEmissionsP, enrollmentsP, byChallengeTypeP, activeParticipantsP
+    ]);
+
+    const users = usersR[0][0] || { totalUsers: 0, activeUsers: 0 };
+    const window = actWindowR[0][0] || { totalActivities: 0, totalEmissions: 0 };
+    const emissionsTrend = (emTrendR[0] || []).map(r => ({ day: r.day, total: Number(r.total || 0) }));
+    const category = (byCategoryR[0] || []).map(r => ({ category: r.category || 'other', total: Number(r.total || 0) }));
+    const topUsersEmissions = (topUsersEmissionsR[0] || []).map(r => ({ username: r.username, total: Number(r.total || 0) }));
+    const enrollments = enrollmentsR[0][0] || { totalEnrollments: 0, completedEnrollments: 0, participants: 0 };
+    const challengeTypes = (byTypeR[0] || []).map(r => ({ type: r.challenge_type || 'unknown', count: Number(r.count || 0) }));
+    const activeParticipants = Number(activeParticipantsR[0][0]?.activeParticipants || 0);
+
+    const html = `
+      <!doctype html>
+      <html><head><meta charset="utf-8" />
+        <title>Users Analytics Report</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 24px; }
+          h1 { margin: 0 0 8px; }
+          h2 { margin: 24px 0 8px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+          th, td { border: 1px solid #ddd; padding: 8px; font-size: 12px; }
+          th { background: #f3f4f6; text-align: left; }
+          .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+          .card { border: 1px solid #e5e7eb; padding: 12px; border-radius: 6px; }
+          .muted { color: #6b7280; font-size: 12px; }
+        </style>
+      </head><body>
+        <h1>Users Analytics</h1>
+        <div class="muted">Window: last ${lastDays} days • Generated ${new Date().toLocaleString()}</div>
+        <div class="kpis">
+          <div class="card"><div>Users</div><div><b>${Number(users.totalUsers||0).toLocaleString()}</b> <span class="muted">(${Number(users.activeUsers||0)} active, ${activeParticipants} participants)</span></div></div>
+          <div class="card"><div>Activities (window)</div><div><b>${Number(window.totalActivities||0).toLocaleString()}</b></div></div>
+          <div class="card"><div>Emissions (window)</div><div><b>${Number(window.totalEmissions||0).toFixed(1)} kg CO₂e</b></div></div>
+          <div class="card"><div>Enrollments</div><div><b>${Number(enrollments.totalEnrollments||0).toLocaleString()}</b> <span class="muted">(${Number(enrollments.completedEnrollments||0)} completed)</span></div></div>
+        </div>
+
+        <h2>Emissions by Category</h2>
+        <table><thead><tr><th>Category</th><th>kg CO₂e</th></tr></thead>
+          <tbody>
+            ${category.map(x => `<tr><td>${x.category}</td><td>${x.total.toFixed(2)}</td></tr>`).join('')}
+          </tbody>
+        </table>
+
+        <h2>Enrollments by Challenge Type</h2>
+        <table><thead><tr><th>Type</th><th>Enrollments</th></tr></thead>
+          <tbody>
+            ${challengeTypes.map(x => `<tr><td>${x.type}</td><td>${x.count}</td></tr>`).join('')}
+          </tbody>
+        </table>
+
+        <h2>Top Users by Emissions (window)</h2>
+        <table><thead><tr><th>User</th><th>kg CO₂e</th></tr></thead>
+          <tbody>
+            ${topUsersEmissions.map(u => `<tr><td>${u.username}</td><td>${u.total.toFixed(1)}</td></tr>`).join('')}
+          </tbody>
+        </table>
+
+        <h2>Daily Emissions (window)</h2>
+        <table><thead><tr><th>Date</th><th>kg CO₂e</th></tr></thead>
+          <tbody>
+            ${emissionsTrend.map(p => `<tr><td>${p.day}</td><td>${p.total.toFixed(1)}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </body></html>
+    `;
+
+    const pdf = await generatePdfFromHtml(html);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="users-analytics-${lastDays}d.pdf"`);
+    res.send(pdf);
+  } catch (e) {
+    console.error('admin GET /analytics/users/pdf error', e);
+    res.status(500).json({ status: 'error', message: 'Failed to generate PDF' });
   }
 });
 
@@ -1050,6 +1323,86 @@ router.get('/ph-sector-estimates', async (req, res) => {
   } catch (e) {
     console.error('admin GET /ph-sector-estimates error', e.response?.data || e.message);
     res.status(500).json({ status: 'error', message: 'Failed to load estimates' });
+  }
+});
+
+// --- PH Sector Estimates: Download as PDF ---
+router.get('/ph-sector-estimates/pdf', async (req, res) => {
+  try {
+    const apiKey = process.env.CLIMATIQ_API_KEY;
+    const money = Number(req.query.money || 500);
+    const unit = String(req.query.unit || 'usd').toLowerCase();
+
+    if (!apiKey) {
+      const html = `<!doctype html><html><head><meta charset="utf-8" /><title>PH Sector Estimates</title>
+        <style>body{font-family:Arial,sans-serif;padding:24px;} .muted{color:#6b7280}</style></head>
+        <body><h1>PH Sector Estimates</h1>
+        <div class="muted">Climatiq-only feature • Generated ${new Date().toLocaleString()}</div>
+        <p>CLIMATIQ_API_KEY not set. No data available.</p></body></html>`;
+      const pdf = await generatePdfFromHtml(html);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'attachment; filename="ph-sector-estimates.pdf"');
+      return res.send(pdf);
+    }
+
+    const headers = { headers: { Authorization: `Bearer ${apiKey}` } };
+    const items = [
+      { id: 'agriculture_fishing_forestry-type_support_activities_for_agriculture_and_forestry', label: 'Agriculture support activities' },
+      { id: 'arable_farming-type_fruit_and_tree_nut_farming', label: 'Fruit & tree nut farming' },
+      { id: 'building_materials-type_cement_production', label: 'Cement production' },
+      { id: 'consumer_goods_rental-type_general_and_consumer_goods_rental', label: 'Consumer goods rental' },
+      { id: 'electrical_equipment-type_all_other_miscellaneous_electrical_equipment_and_component', label: 'Electrical equipment (misc)' },
+      { id: 'electricity-supply_grid-source_production_mix', label: 'Grid electricity mix' },
+      { id: 'metal_products-type_all_other_forging_stamping_sintering', label: 'Metal products (forging/stamping)' },
+      { id: 'fishing_aquaculture-type_fishing_hunting_and_trapping', label: 'Fishing, hunting & trapping' },
+      { id: 'consumer_services-type_all_other_food_drinking_places', label: 'Food & drinking places' },
+      { id: 'fuel-type_coal_mining-fuel_use_na', label: 'Coal mining (fuel use)' },
+      { id: 'fuel-type_other_petroleum_and_coal_products_manufacturing-fuel_use_na', label: 'Other petroleum/coal (fuel use)' }
+    ];
+    const bodyFor = (activity_id) => ({
+      emission_factor: { activity_id, data_version: '^0' },
+      parameters: { money, money_unit: unit }
+    });
+    const results = await Promise.all(items.map(async (it) => {
+      try {
+        const resp = await axios.post('https://api.climatiq.io/data/v1/estimate', bodyFor(it.id), headers);
+        const r = resp.data || {};
+        return { ...it, co2e: Number(r.co2e || 0), co2e_unit: r.co2e_unit || 'kg' };
+      } catch (e) {
+        return null;
+      }
+    }));
+    const ok = results.filter(Boolean);
+    const html = `
+      <!doctype html>
+      <html><head><meta charset="utf-8" />
+        <title>PH Sector Estimates</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 24px; }
+          h1 { margin: 0 0 8px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+          th, td { border: 1px solid #ddd; padding: 8px; font-size: 12px; }
+          th { background: #f3f4f6; text-align: left; }
+          .muted { color: #6b7280; font-size: 12px; }
+        </style>
+      </head><body>
+        <h1>PH Sector Estimates</h1>
+        <div class="muted">Amount: ${money} ${unit.toUpperCase()} • Generated ${new Date().toLocaleString()}</div>
+        <table>
+          <thead><tr><th>#</th><th>Activity</th><th>CO₂e</th><th>Unit</th></tr></thead>
+          <tbody>
+            ${ok.map((x, i) => `<tr><td>${i+1}</td><td>${x.label || x.id}</td><td>${Number(x.co2e||0).toFixed(2)}</td><td>${x.co2e_unit || 'kg'}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </body></html>
+    `;
+    const pdf = await generatePdfFromHtml(html);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="ph-sector-estimates.pdf"');
+    res.send(pdf);
+  } catch (e) {
+    console.error('admin GET /ph-sector-estimates/pdf error', e);
+    res.status(500).json({ status: 'error', message: 'Failed to generate PDF' });
   }
 });
 

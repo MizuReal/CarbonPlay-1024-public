@@ -26,5 +26,9 @@ router.post('/social/motivation', scenarioController.getCarbonMotivation);
 router.post('/social/chat', scenarioController.carbonChat);
 router.get('/stats/summary', scenarioController.getUserStats);
 router.get('/stats/weekly-chart', scenarioController.getWeeklyChart);
+router.get('/stats/weekly-comparison', scenarioController.getWeeklyComparison);
+// User report (JSON + PDF)
+router.get('/me/report', scenarioController.getMyReport);
+router.get('/me/report/pdf', scenarioController.getMyReportPdf);
 
 module.exports = router;

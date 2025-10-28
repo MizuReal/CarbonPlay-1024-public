@@ -29,10 +29,8 @@
                                 <div>
                                     <h1 class="text-3xl font-extrabold tracking-tight">Dashboard</h1>
                                     <p class="text-sm text-muted" id="greeting">Welcome back! Here's your carbon footprint overview.</p>
-                                    <div class="mt-2 flex items-center gap-2 text-xs">
-                                        <span class="badge badge-success badge-outline"><i class="fas fa-medal mr-1"></i> Eco Explorer</span>
-                                        <span class="badge badge-primary badge-outline"><i class="fas fa-bolt mr-1"></i> Streak 3d</span>
-                                        <span class="badge badge-warning badge-outline"><i class="fas fa-seedling mr-1"></i> New Goals</span>
+                                    <div id="earnedBadgesBar" class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                                        <span class="badge badge-ghost"><i class="fas fa-spinner fa-spin mr-1"></i> Loading badges...</span>
                                     </div>
                                 </div>
                             </div>
@@ -42,6 +40,9 @@
                                     <span class="text-muted"><span id="xpCurrent">0</span> / <span id="xpMax">500</span></span>
                                 </div>
                                 <progress id="xpProgressBar" class="progress progress-primary w-full" value="0" max="100"></progress>
+                                <div class="mt-1 text-xs">
+                                    <span class="badge badge-primary badge-outline">Level <span id="xpLevel">1</span></span>
+                                </div>
                                 <div class="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
                                     <div class="p-2 bg-base-100 rounded border border-base-300">
                                         <div id="scenariosCount" class="font-semibold">0</div>
@@ -69,15 +70,28 @@
 
             <div class="grid gap-6">
                 <div class="card bg-base-100 shadow p-4">
-                    <div class="flex justify-between items-start mb-4">
+                        <div class="flex justify-between items-start mb-4">
                         <div>
                             <h2 class="text-lg font-semibold">Your Carbon Footprint</h2>
-                            <p class="text-sm text-muted">Annual estimate based on your lifestyle</p>
+                            <p class="text-sm text-muted">This week (last 7 days)</p>
                         </div>
                         <div id="carbonAnnual" class="text-xl font-bold text-primary">0 kg CO₂e</div>
                     </div>
                     <div class="h-64">
                         <div id="carbonChart" class="h-full"></div>
+                    </div>
+                </div>
+
+                <!-- You vs Community (Line) -->
+                <div class="card bg-base-100 shadow p-4">
+                    <div class="flex justify-between items-start mb-4">
+                        <div>
+                            <h2 class="text-lg font-semibold">You vs Community</h2>
+                            <p class="text-sm text-muted">Last 7 days</p>
+                        </div>
+                    </div>
+                    <div class="h-64">
+                        <div id="weeklyComparisonChart" class="h-full"></div>
                     </div>
                 </div>
 
@@ -194,21 +208,33 @@
                             <div>
                                 <h2 class="text-xl font-extrabold tracking-tight">Your Scenarios</h2>
                                 <p class="text-sm text-muted">Level up your eco-journey — compare lifestyles, track impact, earn badges</p>
-                                <div class="mt-2 flex items-center gap-2 text-xs">
-                                    <span class="badge badge-success badge-outline"><i class="fas fa-medal mr-1"></i> Eco Explorer</span>
-                                    <span class="badge badge-primary badge-outline"><i class="fas fa-bolt mr-1"></i> Streak 3d</span>
+                                <div id="earnedBadgesBarScn" class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                                    <span class="badge badge-ghost"><i class="fas fa-spinner fa-spin mr-1"></i> Loading badges...</span>
                                 </div>
                             </div>
                         </div>
                         <div class="w-full md:w-80">
                             <div class="flex items-center justify-between text-xs">
-                                <span class="font-semibold">XP Progress</span>
+                                <div class="flex items-center gap-2">
+                                    <span class="font-semibold">XP Progress</span>
+                                    <span class="badge badge-primary badge-outline">Level <span id="xpLevelScn">1</span></span>
+                                </div>
                                 <span class="text-muted"><span id="xpCurrentScn">0</span> / <span id="xpMaxScn">500</span></span>
                             </div>
                             <progress id="xpProgressBarScn" class="progress progress-primary w-full" value="0" max="100"></progress>
-                            <div class="mt-2 flex gap-2 text-xs">
-                                <span class="badge badge-ghost"><i class="fas fa-seedling mr-1"></i> <span id="scenariosCountScn">0</span> scenarios</span>
-                                <span class="badge badge-ghost"><i class="fas fa-shoe-prints mr-1"></i> <span id="activitiesCountScn">0</span> activities</span>
+                            <div class="mt-2 grid grid-cols-2 gap-2">
+                                <div class="stat bg-base-100 rounded p-2">
+                                    <div class="flex items-center justify-between text-xs">
+                                        <span class="text-muted"><i class="fas fa-seedling mr-1"></i>Scenarios</span>
+                                        <span class="font-semibold" id="scenariosCountScn">0</span>
+                                    </div>
+                                </div>
+                                <div class="stat bg-base-100 rounded p-2">
+                                    <div class="flex items-center justify-between text-xs">
+                                        <span class="text-muted"><i class="fas fa-shoe-prints mr-1"></i>Activities</span>
+                                        <span class="font-semibold" id="activitiesCountScn">0</span>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -340,7 +366,9 @@
         if (typeof loadEmissionFactors === 'function') loadEmissionFactors();
         if (typeof loadScenarios === 'function') loadScenarios();
                 // Update the modal stats (XP and counts) with live data
-                if (typeof loadUserStatsForScenariosModal === 'function') loadUserStatsForScenariosModal();
+                                if (typeof loadUserStatsForScenariosModal === 'function') loadUserStatsForScenariosModal();
+                                // Load earned badges into the modal header
+                                if (typeof loadUserBadgesForScenarios === 'function') loadUserBadgesForScenarios();
       }
       function closeScenariosModal() {
         const el = document.getElementById('scenariosModal');
@@ -379,17 +407,20 @@
                     const xpBar = document.getElementById('xpProgressBarScn');
                     const scEl = document.getElementById('scenariosCountScn');
                     const acEl = document.getElementById('activitiesCountScn');
+                    const lvlEl = document.getElementById('xpLevelScn');
 
                     const xpTotal = Number(s.xp_total || 0);
                     const levelSize = Number(s.level_size || 500);
                     const xpInLevel = Number(s.xp_in_level || (xpTotal % levelSize));
                     const pct = Number(s.xp_progress_pct || Math.floor((xpInLevel / (levelSize || 1)) * 100));
+                    const level = Number(s.level || Math.floor(xpTotal / (levelSize || 1)) + 1);
 
                     if (xpCur) xpCur.textContent = xpInLevel;
                     if (xpMax) xpMax.textContent = levelSize;
                     if (xpBar) xpBar.value = Math.max(0, Math.min(100, pct));
                     if (scEl) scEl.textContent = s.scenarios ?? 0;
                     if (acEl) acEl.textContent = s.activities ?? 0;
+                    if (lvlEl) lvlEl.textContent = String(level);
                 } catch (e) {
                     // Keep placeholders on error
                     console.warn('Scenarios modal stats failed:', e.message || e);

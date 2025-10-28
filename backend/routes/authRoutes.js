@@ -13,5 +13,7 @@ router.post('/login', authController.login);
 router.get('/me', authenticate, authController.getMe);
 router.put('/profile', authenticate, authController.updateProfile);
 router.post('/profile/picture', authenticate, upload.single('profilePicture'), authController.uploadProfilePicture);
+// Badges
+router.get('/me/badges', authenticate, authController.getMyBadges);
 
 module.exports = router;

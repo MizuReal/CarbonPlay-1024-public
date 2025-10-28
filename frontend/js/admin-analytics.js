@@ -123,5 +123,22 @@
   }
 
   document.getElementById('refreshBtn')?.addEventListener('click', load);
+  // Download PDF handler
+  document.getElementById('downloadPdfBtn')?.addEventListener('click', async () => {
+    try {
+      const res = await fetch(`${API_BASE}/admin/analytics/overview/pdf`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Failed to generate PDF');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'analytics-overview.pdf';
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      if (window.notify?.error) window.notify.error('Download failed');
+    }
+  });
   load();
 })();

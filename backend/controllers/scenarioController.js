@@ -973,6 +973,62 @@ exports.getWeeklyChart = async (req, res) => {
   }
 };
 
+// Return last 7 days: user daily totals vs community average daily totals
+exports.getWeeklyComparison = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // User per-day totals
+    const [userRows] = await db.query(`
+      SELECT DATE(sa.created_at) AS day, COALESCE(SUM(sa.co2e_amount), 0) AS total
+        FROM scenario_activities sa
+        INNER JOIN scenarios s ON sa.scenario_id = s.id
+       WHERE s.user_id = ?
+         AND s.is_active = 1
+         AND sa.created_at >= (CURDATE() - INTERVAL 6 DAY)
+       GROUP BY DATE(sa.created_at)
+       ORDER BY day ASC
+    `, [userId]);
+
+    // Community per-day average (average of users' totals per day)
+    const [commRows] = await db.query(`
+      SELECT day, AVG(user_total) AS avg_total FROM (
+        SELECT DATE(sa.created_at) AS day, s.user_id, COALESCE(SUM(sa.co2e_amount),0) AS user_total
+          FROM scenarios s
+          LEFT JOIN scenario_activities sa ON s.id = sa.scenario_id
+            AND sa.created_at >= (CURDATE() - INTERVAL 6 DAY)
+         WHERE s.is_active = 1
+         GROUP BY s.user_id, DATE(sa.created_at)
+      ) t
+      WHERE day IS NOT NULL
+      GROUP BY day
+      ORDER BY day ASC
+    `);
+
+    // Build 7-day labels
+    const labels = [];
+    const userValues = [];
+    const communityValues = [];
+    const now = new Date();
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const dayStr = d.toISOString().split('T')[0];
+      const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
+      labels.push(dayName);
+      const u = userRows.find(r => r.day && r.day.toISOString().split('T')[0] === dayStr);
+      const c = commRows.find(r => r.day && r.day.toISOString().split('T')[0] === dayStr);
+      userValues.push(u ? Number(u.total || 0) : 0);
+      communityValues.push(c ? Number(c.avg_total || 0) : 0);
+    }
+
+    res.json({ status: 'success', data: { labels, userValues, communityValues } });
+  } catch (e) {
+    console.error('getWeeklyComparison error', e);
+    res.status(500).json({ status: 'error', message: 'Failed to load weekly comparison' });
+  }
+};
+
 // Helper function to get badges for rankings
 const getBadgeForRank = (rank, type) => {
   const badges = {
@@ -1243,5 +1299,201 @@ exports.carbonChat = async (req, res) => {
   } catch (error) {
     console.error('carbonChat error:', error);
     res.status(500).json({ status: 'error', message: 'Unable to process chat right now' });
+  }
+};
+
+// ===================== USER REPORT (JSON + PDF) =====================
+const { generatePdfFromHtml } = require('../utils/pdfGenerator');
+
+exports.getMyReport = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    // Parallel queries for efficiency
+    const [weeklyRows, allRows, catWeeklyRows, catAllRows, scCountRows, actCountRows, userRows] = await Promise.all([
+      db.query(`
+        SELECT COALESCE(SUM(sa.co2e_amount), 0) AS total
+          FROM scenarios s
+          LEFT JOIN scenario_activities sa ON s.id = sa.scenario_id
+           AND sa.created_at >= (NOW() - INTERVAL 7 DAY)
+         WHERE s.user_id = ? AND s.is_active = 1
+      `, [userId]).then(r => r[0]),
+      db.query(`
+        SELECT COALESCE(SUM(sa.co2e_amount), 0) AS total
+          FROM scenarios s
+          LEFT JOIN scenario_activities sa ON s.id = sa.scenario_id
+         WHERE s.user_id = ? AND s.is_active = 1
+      `, [userId]).then(r => r[0]),
+      db.query(`
+        SELECT sa.category, COALESCE(SUM(sa.co2e_amount),0) AS total
+          FROM scenarios s
+          LEFT JOIN scenario_activities sa ON s.id = sa.scenario_id
+           AND sa.created_at >= (NOW() - INTERVAL 7 DAY)
+         WHERE s.user_id = ? AND s.is_active = 1
+         GROUP BY sa.category
+      `, [userId]).then(r => r[0]),
+      db.query(`
+        SELECT sa.category, COALESCE(SUM(sa.co2e_amount),0) AS total
+          FROM scenarios s
+          LEFT JOIN scenario_activities sa ON s.id = sa.scenario_id
+         WHERE s.user_id = ? AND s.is_active = 1
+         GROUP BY sa.category
+      `, [userId]).then(r => r[0]),
+      db.query('SELECT COUNT(*) AS c FROM scenarios WHERE user_id = ? AND is_active = 1', [userId]).then(r => r[0]),
+      db.query(`SELECT COUNT(sa.id) AS c
+                 FROM scenarios s LEFT JOIN scenario_activities sa ON s.id = sa.scenario_id
+                WHERE s.user_id = ? AND s.is_active = 1`, [userId]).then(r => r[0]),
+      db.query('SELECT id, username, email FROM users WHERE id = ?', [userId]).then(r => r[0])
+    ]);
+
+    const weekly = Number(weeklyRows?.[0]?.total || 0);
+    const allTime = Number(allRows?.[0]?.total || 0);
+    const byCatWeek = (catWeeklyRows || []).filter(r => r.category).map(r => ({ category: r.category, total: Number(r.total || 0) }));
+    const byCatAll = (catAllRows || []).filter(r => r.category).map(r => ({ category: r.category, total: Number(r.total || 0) }));
+    const scenarios = Number(scCountRows?.[0]?.c || 0);
+    const activities = Number(actCountRows?.[0]?.c || 0);
+    const user = userRows?.[0] || { id: userId, username: 'User' };
+
+    return res.json({
+      status: 'success',
+      data: {
+        user: { id: user.id, username: user.username, email: user.email },
+        generated_at: new Date().toISOString(),
+        weekly_total: Number(weekly.toFixed(1)),
+        all_time_total: Number(allTime.toFixed(1)),
+        categories_week: byCatWeek,
+        categories_all: byCatAll,
+        counts: { scenarios, activities }
+      }
+    });
+  } catch (e) {
+    console.error('getMyReport error', e);
+    res.status(500).json({ status: 'error', message: 'Failed to build report' });
+  }
+};
+
+exports.getMyReportPdf = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    // Reuse JSON builder to avoid duplication
+    const fakeReq = { ...req };
+    const summary = await (async () => {
+      const [weeklyRows, allRows, catWeeklyRows, catAllRows, scCountRows, actCountRows, userRows] = await Promise.all([
+        db.query(`
+          SELECT COALESCE(SUM(sa.co2e_amount), 0) AS total
+            FROM scenarios s
+            LEFT JOIN scenario_activities sa ON s.id = sa.scenario_id
+             AND sa.created_at >= (NOW() - INTERVAL 7 DAY)
+           WHERE s.user_id = ? AND s.is_active = 1
+        `, [userId]).then(r => r[0]),
+        db.query(`
+          SELECT COALESCE(SUM(sa.co2e_amount), 0) AS total
+            FROM scenarios s
+            LEFT JOIN scenario_activities sa ON s.id = sa.scenario_id
+           WHERE s.user_id = ? AND s.is_active = 1
+        `, [userId]).then(r => r[0]),
+        db.query(`
+          SELECT sa.category, COALESCE(SUM(sa.co2e_amount),0) AS total
+            FROM scenarios s
+            LEFT JOIN scenario_activities sa ON s.id = sa.scenario_id
+             AND sa.created_at >= (NOW() - INTERVAL 7 DAY)
+           WHERE s.user_id = ? AND s.is_active = 1
+           GROUP BY sa.category
+        `, [userId]).then(r => r[0]),
+        db.query(`
+          SELECT sa.category, COALESCE(SUM(sa.co2e_amount),0) AS total
+            FROM scenarios s
+            LEFT JOIN scenario_activities sa ON s.id = sa.scenario_id
+           WHERE s.user_id = ? AND s.is_active = 1
+           GROUP BY sa.category
+        `, [userId]).then(r => r[0]),
+        db.query('SELECT COUNT(*) AS c FROM scenarios WHERE user_id = ? AND is_active = 1', [userId]).then(r => r[0]),
+        db.query(`SELECT COUNT(sa.id) AS c
+                   FROM scenarios s LEFT JOIN scenario_activities sa ON s.id = sa.scenario_id
+                  WHERE s.user_id = ? AND s.is_active = 1`, [userId]).then(r => r[0]),
+        db.query('SELECT id, username, email FROM users WHERE id = ?', [userId]).then(r => r[0])
+      ]);
+      return {
+        weekly: Number(weeklyRows?.[0]?.total || 0),
+        allTime: Number(allRows?.[0]?.total || 0),
+        byCatWeek: (catWeeklyRows || []).filter(r => r.category).map(r => ({ category: r.category, total: Number(r.total || 0) })),
+        byCatAll: (catAllRows || []).filter(r => r.category).map(r => ({ category: r.category, total: Number(r.total || 0) })),
+        scenarios: Number(scCountRows?.[0]?.c || 0),
+        activities: Number(actCountRows?.[0]?.c || 0),
+        user: userRows?.[0] || { id: userId, username: 'User' }
+      };
+    })();
+
+  const dt = new Date();
+    const dateStr = dt.toISOString().split('T')[0];
+
+  // Local helper for category labels
+  const capitalize = (s) => String(s || '').replace(/_/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
+
+    // Basic professional layout with inline CSS (safe for Puppeteer)
+    const css = `
+      <style>
+        * { box-sizing: border-box; }
+        body { font-family: Arial, Helvetica, sans-serif; color: #111827; margin: 24px; }
+        .header { display:flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; margin-bottom: 16px; }
+        .brand { font-size: 20px; font-weight: 700; color: #065f46; }
+        .muted { color: #6b7280; font-size: 12px; }
+        .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 12px 0; }
+        .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; }
+        .card .label { font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: .04em; }
+        .card .value { font-size: 18px; font-weight: 700; color: #065f46; }
+        h2 { font-size: 14px; margin: 18px 0 8px; color: #111827; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #e5e7eb; padding: 8px; font-size: 12px; }
+        th { background: #f9fafb; text-align: left; }
+        .right { text-align: right; }
+        .footer { margin-top: 16px; font-size: 11px; color: #6b7280; border-top: 1px solid #e5e7eb; padding-top: 8px; }
+      </style>`;
+
+    const row = (name, val) => `<tr><td>${name}</td><td class="right">${val.toFixed(1)} kg CO₂e</td></tr>`;
+
+    const html = `
+      <html><head><meta charset="utf-8"/>${css}</head>
+      <body>
+        <div class="header">
+          <div class="brand">CarbonPlay — Personal Emissions Report</div>
+          <div class="muted">Generated: ${dateStr}</div>
+        </div>
+        <div class="muted">User: ${summary.user.username}</div>
+
+        <div class="cards">
+          <div class="card"><div class="label">This Week</div><div class="value">${summary.weekly.toFixed(1)} kg CO₂e</div></div>
+          <div class="card"><div class="label">All Time</div><div class="value">${summary.allTime.toFixed(1)} kg CO₂e</div></div>
+          <div class="card"><div class="label">Scenarios / Activities</div><div class="value">${summary.scenarios} / ${summary.activities}</div></div>
+        </div>
+
+        <h2>Weekly by Category</h2>
+        <table>
+          <thead><tr><th>Category</th><th>Total</th></tr></thead>
+          <tbody>
+            ${(summary.byCatWeek.length ? summary.byCatWeek : [{category:'—',total:0}])
+              .map(c => row(capitalize(c.category), c.total)).join('')}
+          </tbody>
+        </table>
+
+        <h2>All Time by Category</h2>
+        <table>
+          <thead><tr><th>Category</th><th>Total</th></tr></thead>
+          <tbody>
+            ${(summary.byCatAll.length ? summary.byCatAll : [{category:'—',total:0}])
+              .map(c => row(capitalize(c.category), c.total)).join('')}
+          </tbody>
+        </table>
+
+        <div class="footer">CarbonPlay · Your guide to understanding and improving your carbon impact.</div>
+      </body></html>
+    `;
+
+    const pdf = await generatePdfFromHtml(html);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="CarbonPlay_Report_${summary.user.username || 'User'}_${dateStr}.pdf"`);
+    return res.send(pdf);
+  } catch (e) {
+    console.error('getMyReportPdf error', e);
+    res.status(500).json({ status: 'error', message: 'Failed to generate PDF' });
   }
 };

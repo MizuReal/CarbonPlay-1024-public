@@ -85,5 +85,26 @@
     if (unitSel) unitSel.addEventListener('change', load);
     const amountInp = document.getElementById('amountInput');
     if (amountInp) amountInp.addEventListener('change', load);
+
+    const dl = document.getElementById('downloadPdfBtn');
+    if (dl) dl.addEventListener('click', async () => {
+      const token = localStorage.getItem('token');
+      const amount = Number(el('amountInput')?.value || 500) || 500;
+      const unit = (el('unitSelect')?.value || 'usd');
+      try {
+        const res = await fetch(`http://localhost:3000/api/admin/ph-sector-estimates/pdf?money=${encodeURIComponent(amount)}&unit=${encodeURIComponent(unit)}` , {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (!res.ok) throw new Error('Failed to generate PDF');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'ph-sector-estimates.pdf';
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        if (window.notify?.error) window.notify.error('Download failed');
+      }
+    });
   });
 })();

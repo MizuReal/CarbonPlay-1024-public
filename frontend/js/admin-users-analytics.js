@@ -140,5 +140,24 @@
 
   document.getElementById('refreshBtn')?.addEventListener('click', load);
   document.getElementById('windowSelect')?.addEventListener('change', load);
+  document.getElementById('downloadPdfBtn')?.addEventListener('click', async () => {
+    const days = Number(document.querySelector('#windowSelect')?.value || 30);
+    const API_BASE = 'http://localhost:3000/api';
+    const token = localStorage.getItem('token');
+    try {
+      const res = await fetch(`${API_BASE}/admin/analytics/users/pdf?days=${encodeURIComponent(days)}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Failed to generate PDF');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `users-analytics-${days}d.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      if (window.notify?.error) window.notify.error('Download failed');
+    }
+  });
   load();
 })();

@@ -8,11 +8,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
   fetchUserProfile();
   loadUserStats();
+  loadUserBadges();
   loadLatestScenarios();
   loadLeaderboard('scenarios');
   loadMyChallenges();
   loadMotivation();
   initCarbonChart();
+  initWeeklyComparisonChart();
   attachScenariosUpdateListener();
 
   document.querySelectorAll('.tab-btn').forEach((btn) => {
@@ -59,6 +61,40 @@ async function fetchUserProfile() {
   }
 }
 
+// Load and render earned badges into the dashboard header bar
+async function loadUserBadges() {
+  const bar = document.getElementById('earnedBadgesBar');
+  if (!bar) return;
+  try {
+    const token = localStorage.getItem('token');
+    const res = await fetch('http://localhost:3000/api/auth/me/badges', {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!res.ok) throw new Error('Failed to load badges');
+    const payload = await res.json();
+    if (payload.status !== 'success') throw new Error(payload.message || 'Failed');
+    const all = Array.isArray(payload.data?.badges) ? payload.data.badges : [];
+    const earned = all.filter(b => b && b.earned);
+
+    if (!earned.length) {
+      bar.innerHTML = '<span class="badge badge-ghost"><i class="fas fa-circle-info mr-1"></i>No badges yet</span>';
+      return;
+    }
+
+    const items = earned.slice(0, 3).map(b => {
+      const icon = (b.icon || '🏅');
+      const name = escapeHtml(String(b.name || 'Badge'));
+      return `<span class="badge badge-success badge-outline" title="${name}"><span class="mr-1">${icon}</span>${name}</span>`;
+    });
+    if (earned.length > 3) {
+      items.push(`<span class="badge badge-ghost" title="${earned.length} total">+${earned.length - 3} more</span>`);
+    }
+    bar.innerHTML = items.join('');
+  } catch (e) {
+    bar.innerHTML = '<span class="badge badge-ghost"><i class="fas fa-exclamation-circle mr-1"></i>Badges unavailable</span>';
+  }
+}
+
 async function loadUserStats() {
   try {
     const token = localStorage.getItem('token');
@@ -89,6 +125,21 @@ async function loadUserStats() {
     if (xpCur) xpCur.textContent = xpInLevel;
     if (xpMax) xpMax.textContent = levelSize;
     if (xpBar) xpBar.value = Math.max(0, Math.min(100, pct));
+
+    // Show current XP level
+    const xpLevelEl = document.getElementById('xpLevel');
+    const level = Number(s.level || Math.floor(xpTotal / (levelSize || 1)) + 1);
+    if (xpLevelEl) xpLevelEl.textContent = String(level);
+
+    // Simple level-up notification (local, non-persistent)
+    try {
+      const prevLevelStr = localStorage.getItem('xpPrevLevel');
+      const prevLevel = prevLevelStr ? parseInt(prevLevelStr, 10) : level;
+      if (!isNaN(prevLevel) && level > prevLevel && typeof showToast === 'function') {
+        showToast(`Level up! You reached Level ${level}`, 'success');
+      }
+      localStorage.setItem('xpPrevLevel', String(level));
+    } catch (_) {}
   } catch (e) {
     // Silent fail; keep placeholders
     console.error('Error loading stats:', e);
@@ -321,10 +372,9 @@ async function loadMotivation(userWeeklyOverride) {
       else levelBadgeEl.classList.add('badge-primary');
     }
 
-    // Update the Carbon Footprint (annual estimate from weekly * 52)
+    // Update the Carbon Footprint to show this week's total only (last 7 days)
     if (annualEl) {
-      const annual = weekly * 52;
-      const display = `${annual.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg CO₂e`;
+      const display = `${weekly.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg CO₂e`;
       annualEl.textContent = display;
     }
   } catch (e) {
@@ -750,6 +800,44 @@ async function initCarbonChart() {
     };
     carbonChartInstance = new ApexCharts(container, options);
     await carbonChartInstance.render();
+  }
+}
+
+// Line chart: user vs community average (last 7 days)
+async function initWeeklyComparisonChart() {
+  const container = document.getElementById('weeklyComparisonChart');
+  if (!container) return;
+  const token = localStorage.getItem('token');
+  try {
+    const res = await fetch('http://localhost:3000/api/stats/weekly-comparison', {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const data = await res.json();
+    if (!res.ok || data.status !== 'success') throw new Error(data.message || 'Failed');
+    const labels = data.data.labels || [];
+    const userVals = data.data.userValues || [];
+    const commVals = data.data.communityValues || [];
+
+    const options = {
+      chart: { type: 'line', height: '100%', toolbar: { show: false } },
+      series: [
+        { name: 'You', data: userVals },
+        { name: 'Community Avg', data: commVals }
+      ],
+      xaxis: { categories: labels, labels: { style: { colors: '#9ca3af' } } },
+      yaxis: { labels: { style: { colors: '#9ca3af' } }, min: 0 },
+      stroke: { width: 3, curve: 'smooth' },
+      markers: { size: 3 },
+      colors: ['#22c55e', '#3b82f6'],
+      tooltip: { y: { formatter: (val) => `${val} kg` } },
+      grid: { borderColor: 'rgba(156,163,175,0.08)' },
+      legend: { position: 'top' }
+    };
+    const chart = new ApexCharts(container, options);
+    await chart.render();
+  } catch (e) {
+    // fallback content
+    container.innerHTML = '<div class="text-sm text-muted"><i class="fas fa-exclamation-circle mr-1"></i> Comparison unavailable</div>';
   }
 }
 
